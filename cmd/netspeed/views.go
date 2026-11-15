@@ -32,7 +32,8 @@ func (a *App) layoutFrame(gtx layout.Context) layout.Dimensions {
 
 	a.mu.Lock()
 	pal := a.pal
-	th := a.th
+	thCopy := *a.th
+	th := &thCopy
 	activeTab := a.activeTab
 	running := a.running
 	// Smooth needle/speed interpolation toward targetMbps.

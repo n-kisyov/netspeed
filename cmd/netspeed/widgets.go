@@ -114,10 +114,14 @@ func DrawSpeedGauge(
 	if maxW := gtx.Constraints.Max.X; maxW > 0 && maxW < sizePx {
 		sizePx = maxW
 	}
-	if sizePx < gtx.Dp(unit.Dp(210)) {
-		sizePx = gtx.Dp(unit.Dp(210))
+	if maxH := gtx.Constraints.Max.Y - gtx.Dp(unit.Dp(28)); maxH > 0 && maxH < sizePx {
+		sizePx = maxH
+	}
+	if sizePx < gtx.Dp(unit.Dp(180)) {
+		sizePx = gtx.Dp(unit.Dp(180))
 	}
 
+	gtx.Constraints = layout.Exact(image.Pt(sizePx, sizePx))
 	return layout.Stack{Alignment: layout.Center}.Layout(gtx,
 		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
 			cx := float32(sizePx) / 2
@@ -235,8 +239,8 @@ func DrawSpeedGauge(
 						subText = "RUN TEST"
 					}
 
-					return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-						gtx.Constraints.Min = image.Pt(btnSize, btnSize)
+					return func(gtx layout.Context) layout.Dimensions {
+						gtx.Constraints = layout.Exact(image.Pt(btnSize, btnSize))
 						return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 							return layout.Flex{Axis: layout.Vertical, Alignment: layout.Middle}.Layout(gtx,
 								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -254,7 +258,7 @@ func DrawSpeedGauge(
 								}),
 							)
 						})
-					})
+					}(gtx)
 				})
 			}
 
@@ -395,6 +399,9 @@ func DrawSparkline(gtx layout.Context, pal AppPalette, samples []float64, lineCo
 
 // Card draws a minimalist rounded surface card with a 1px border.
 func Card(gtx layout.Context, pal AppPalette, radiusDp, padDp unit.Dp, w layout.Widget) layout.Dimensions {
+	if gtx.Constraints.Max.X > 0 && gtx.Constraints.Max.X < 1<<20 {
+		gtx.Constraints.Min.X = gtx.Constraints.Max.X
+	}
 	pad := layout.UniformInset(padDp)
 	macro := op.Record(gtx.Ops)
 	dims := pad.Layout(gtx, w)

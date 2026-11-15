@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gioui.org/app"
@@ -70,11 +71,13 @@ type App struct {
 	ui        uiControls
 	activeTab int
 
-	running       bool
-	cancelTest    context.CancelFunc
-	forceQuit     bool
-	startHidden   bool
-	appliedFirst  bool
+	running        bool
+	cancelTest     context.CancelFunc
+	forceQuit      bool
+	startHidden    bool
+	appliedFirst   bool
+	smokeTest      bool
+	framesRendered atomic.Int64
 	phase         engine.Phase
 	targetMbps    float64
 	displayMbps   float64
@@ -190,12 +193,12 @@ func (a *App) toggleTheme() {
 	applyMaterialPalette(a.th, a.pal)
 	_ = config.Save(a.cfg)
 	dark := a.cfg.Theme == "dark"
-	hwnd := a.resolveHWNDLocked()
+	hwnd := a.hwnd
 	win := a.win
 	a.mu.Unlock()
 
 	if hwnd != 0 {
-		ApplyWindowTheme(hwnd, dark)
+		go ApplyWindowTheme(hwnd, dark)
 	}
 	if win != nil {
 		win.Invalidate()
@@ -243,29 +246,22 @@ func (a *App) setScheduleInterval(minutes int, enable bool) {
 	}
 }
 
-func (a *App) resolveHWNDLocked() uintptr {
-	if a.hwnd == 0 {
-		a.hwnd = FindProcessMainWindow()
-	}
-	return a.hwnd
-}
-
 func (a *App) hideToTray() {
 	a.mu.Lock()
-	hwnd := a.resolveHWNDLocked()
+	hwnd := a.hwnd
 	a.mu.Unlock()
 	if hwnd != 0 {
-		HideWindowToTray(hwnd)
+		go HideWindowToTray(hwnd)
 	}
 }
 
 func (a *App) showFromTray() {
 	a.mu.Lock()
-	hwnd := a.resolveHWNDLocked()
+	hwnd := a.hwnd
 	win := a.win
 	a.mu.Unlock()
 	if hwnd != 0 {
-		ShowWindowFromTray(hwnd)
+		go ShowWindowFromTray(hwnd)
 	}
 	if win != nil {
 		win.Perform(system.ActionRaise)
@@ -558,11 +554,14 @@ func (a *App) runWindowLoop() error {
 				a.appliedFirst = true
 				a.mu.Unlock()
 
-				ApplyWindowTheme(e.HWND, dark)
-				ApplyAppIcon(e.HWND, a.tray.IconHandle())
-				if shouldHide {
-					HideWindowToTray(e.HWND)
-				}
+				hIcon := a.tray.IconHandle()
+				go func(hwnd uintptr, darkTheme bool, hide bool, icon uintptr) {
+					ApplyWindowTheme(hwnd, darkTheme)
+					ApplyAppIcon(hwnd, icon)
+					if hide {
+						HideWindowToTray(hwnd)
+					}
+				}(e.HWND, dark, shouldHide, hIcon)
 			}
 		case *app.ClosingEvent:
 			a.mu.Lock()
@@ -581,15 +580,37 @@ func (a *App) runWindowLoop() error {
 			gtx := app.NewContext(&ops, e)
 			a.layoutFrame(gtx)
 			e.Frame(gtx.Ops)
+			a.framesRendered.Add(1)
 		}
 	}
 }
 
 func main() {
 	minimized := flag.Bool("minimized", false, "Start minimized to the Windows system tray")
+	smokeTest := flag.Bool("smoke-test", false, "Exit cleanly after verifying frames render without freezing")
 	flag.Parse()
 
 	application := newApp(*minimized)
+	application.smokeTest = *smokeTest
+
+	if *smokeTest {
+		go func() {
+			deadline := time.Now().Add(6 * time.Second)
+			for time.Now().Before(deadline) {
+				time.Sleep(300 * time.Millisecond)
+				if application.framesRendered.Load() >= 3 {
+					time.Sleep(1200 * time.Millisecond)
+					application.sched.Stop()
+					application.tray.Close()
+					os.Exit(0)
+				}
+			}
+			application.sched.Stop()
+			application.tray.Close()
+			os.Exit(2)
+		}()
+	}
+
 	go func() {
 		if err := application.runWindowLoop(); err != nil {
 			os.Exit(1)

@@ -38,7 +38,6 @@ var (
 	procCreateIconIndirect = user32.NewProc("CreateIconIndirect")
 	procDestroyIcon       = user32.NewProc("DestroyIcon")
 	procLoadIconW         = user32.NewProc("LoadIconW")
-	procSendMessageW      = user32.NewProc("SendMessageW")
 )
 
 const (
@@ -210,13 +209,14 @@ func (t *TrayController) Close() {
 	}
 }
 
-// ApplyAppIcon sets the programmatic speedometer HICON on the Gio main window.
+// ApplyAppIcon sets the programmatic speedometer HICON on the Gio main window asynchronously
+// so it never blocks if called while the Gio window thread is delivering an event.
 func ApplyAppIcon(hwnd uintptr, hIcon uintptr) {
 	if hwnd == 0 || hIcon == 0 {
 		return
 	}
-	_, _, _ = procSendMessageW.Call(hwnd, wmSetIcon, 0, hIcon) // ICON_SMALL
-	_, _, _ = procSendMessageW.Call(hwnd, wmSetIcon, 1, hIcon) // ICON_BIG
+	_, _, _ = procPostMessageW.Call(hwnd, wmSetIcon, 0, hIcon) // ICON_SMALL
+	_, _, _ = procPostMessageW.Call(hwnd, wmSetIcon, 1, hIcon) // ICON_BIG
 }
 
 func (t *TrayController) runMessageLoop() {
@@ -226,7 +226,7 @@ func (t *TrayController) runMessageLoop() {
 
 	hInst, _, _ := procGetModuleHandleW.Call(0)
 	className, _ := windows.UTF16PtrFromString("NetSpeedTrayWindowClass")
-	winTitle, _ := windows.UTF16PtrFromString("NetSpeedTrayHidden")
+	winTitle, _ := windows.UTF16PtrFromString("")
 
 	hIcon := createSpeedometerIcon()
 	if hIcon == 0 {

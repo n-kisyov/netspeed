@@ -13,7 +13,7 @@ var (
 	dwmapi                  = windows.NewLazySystemDLL("dwmapi.dll")
 	procDwmSetWindowAttr    = dwmapi.NewProc("DwmSetWindowAttribute")
 	user32                  = windows.NewLazySystemDLL("user32.dll")
-	procShowWindow          = user32.NewProc("ShowWindow")
+	procShowWindowAsync     = user32.NewProc("ShowWindowAsync")
 	procIsIconic            = user32.NewProc("IsIconic")
 	procIsWindowVisible     = user32.NewProc("IsWindowVisible")
 	procSetForegroundWindow = user32.NewProc("SetForegroundWindow")
@@ -68,25 +68,25 @@ func ApplyWindowTheme(hwnd uintptr, dark bool) {
 	)
 }
 
-// ShowWindowFromTray restores and focuses the main Gio window.
+// ShowWindowFromTray restores and focuses the main Gio window asynchronously.
 func ShowWindowFromTray(hwnd uintptr) {
 	if hwnd == 0 {
 		return
 	}
-	_, _, _ = procShowWindow.Call(hwnd, swShow)
+	_, _, _ = procShowWindowAsync.Call(hwnd, swShow)
 	iconic, _, _ := procIsIconic.Call(hwnd)
 	if iconic != 0 {
-		_, _, _ = procShowWindow.Call(hwnd, swRestore)
+		_, _, _ = procShowWindowAsync.Call(hwnd, swRestore)
 	}
 	_, _, _ = procSetForegroundWindow.Call(hwnd)
 }
 
-// HideWindowToTray hides the main window without terminating the app.
+// HideWindowToTray hides the main window asynchronously without blocking the Gio window thread.
 func HideWindowToTray(hwnd uintptr) {
 	if hwnd == 0 {
 		return
 	}
-	_, _, _ = procShowWindow.Call(hwnd, swHide)
+	_, _, _ = procShowWindowAsync.Call(hwnd, swHide)
 }
 
 // IsWindowVisible reports whether the given HWND is currently visible.
