@@ -683,7 +683,16 @@ func (a *App) runWindowLoop() error {
 func main() {
 	minimized := flag.Bool("minimized", false, "Start minimized to the Windows system tray")
 	smokeTest := flag.Bool("smoke-test", false, "Exit cleanly after verifying frames render without freezing")
+	genScreenshots := flag.String("generate-screenshots", "", "Render project screenshots to directory and exit")
 	flag.Parse()
+
+	if *genScreenshots != "" {
+		if err := generateScreenshots(*genScreenshots); err != nil {
+			_, _ = os.Stderr.WriteString(err.Error() + "\n")
+			os.Exit(1)
+		}
+		return
+	}
 
 	application := newApp(*minimized)
 	application.smokeTest = *smokeTest

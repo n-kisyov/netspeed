@@ -2,6 +2,23 @@
 
 Minimalist Windows 11 internet speed test desktop application (`netspeed.exe`) and command-line tool (`netspeed-cli.exe`) built in **pure Go** with a shared multi-provider measurement engine and **Gio UI (`gioui.org`)** GPU-accelerated rendering.
 
+## Screenshots
+
+| Dark Dashboard (Completed Test & Grade A+) | Light Dashboard (Live Download Phase) |
+| :---: | :---: |
+| [![Dark Dashboard](docs/screenshots/01-dashboard-dark.png)](docs/screenshots/01-dashboard-dark.png) | [![Light Dashboard](docs/screenshots/02-dashboard-light.png)](docs/screenshots/02-dashboard-light.png) |
+| [01-dashboard-dark.png](docs/screenshots/01-dashboard-dark.png) | [02-dashboard-light.png](docs/screenshots/02-dashboard-light.png) |
+
+| Servers & Custom Endpoint URL | Scheduled Tests, System Tray & Tuning |
+| :---: | :---: |
+| [![Servers and Custom URL](docs/screenshots/03-servers-custom-url.png)](docs/screenshots/03-servers-custom-url.png) | [![Schedule and System Tray](docs/screenshots/04-schedule-system-tray.png)](docs/screenshots/04-schedule-system-tray.png) |
+| [03-servers-custom-url.png](docs/screenshots/03-servers-custom-url.png) | [04-schedule-system-tray.png](docs/screenshots/04-schedule-system-tray.png) |
+
+| History & Multi-Metric Trend Graph | Shareable Result PNG Card Export |
+| :---: | :---: |
+| [![History and Trends](docs/screenshots/05-history-trends.png)](docs/screenshots/05-history-trends.png) | [![Result Card Export](docs/screenshots/06-result-card-export.png)](docs/screenshots/06-result-card-export.png) |
+| [05-history-trends.png](docs/screenshots/05-history-trends.png) | [06-result-card-export.png](docs/screenshots/06-result-card-export.png) |
+
 ## Features
 
 - **Speedtest.net (Ookla) & Cloudflare Providers**: Discovers ISP, public IP, and nearby servers, probes latency concurrently, and automatically falls back to Cloudflare Edge if Ookla endpoints are unavailable.
