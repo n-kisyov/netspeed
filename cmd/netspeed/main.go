@@ -165,7 +165,6 @@ func newApp(startMinimizedFlag bool) *App {
 		}
 	} else if len(histItems) > 0 {
 		last := histItems[0]
-		a.clientInfo = last.Client
 		if last.Server.Name != "" && (cfg.PreferredServerID == "" || cfg.PreferredServerID == last.Server.ID) {
 			a.selectedServer = last.Server
 		}

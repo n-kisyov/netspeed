@@ -27,35 +27,57 @@ type cloudflareMeta struct {
 	ASOrganization string          `json:"asOrganization"`
 	City           string          `json:"city"`
 	Country        string          `json:"country"`
-	Colo           string          `json:"colo"`
+	Colo           json.RawMessage `json:"colo"`
 	Latitude       json.RawMessage `json:"latitude"`
 	Longitude      json.RawMessage `json:"longitude"`
 }
 
-func (c *CloudflareProvider) fetchMeta(ctx context.Context) (ClientInfo, string, error) {
+func parseCloudflareColo(raw json.RawMessage) (iata string, coloCity string) {
+	trimmed := string(raw)
+	if len(trimmed) == 0 {
+		return "", ""
+	}
+	var asStr string
+	if err := json.Unmarshal(raw, &asStr); err == nil && asStr != "" {
+		return asStr, ""
+	}
+	var asObj struct {
+		IATA string `json:"iata"`
+		City string `json:"city"`
+	}
+	if err := json.Unmarshal(raw, &asObj); err == nil {
+		return asObj.IATA, asObj.City
+	}
+	return "", ""
+}
+
+func (c *CloudflareProvider) fetchMeta(ctx context.Context) (ClientInfo, string, string, error) {
 	req, err := newRequest(ctx, http.MethodGet, "https://speed.cloudflare.com/meta", nil)
 	if err != nil {
-		return ClientInfo{}, "", err
+		return ClientInfo{}, "", "", err
 	}
+	req.Header.Set("Referer", "https://speed.cloudflare.com/")
+	req.Header.Set("Origin", "https://speed.cloudflare.com")
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return ClientInfo{}, "", err
+		return ClientInfo{}, "", "", err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		return ClientInfo{}, "", fmt.Errorf("cloudflare meta HTTP %d", resp.StatusCode)
+		return ClientInfo{}, "", "", fmt.Errorf("cloudflare meta HTTP %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
 	if err != nil {
-		return ClientInfo{}, "", err
+		return ClientInfo{}, "", "", err
 	}
 
 	var meta cloudflareMeta
 	if err := json.Unmarshal(body, &meta); err != nil {
-		return ClientInfo{}, "", err
+		return ClientInfo{}, "", "", err
 	}
 
+	iata, coloCity := parseCloudflareColo(meta.Colo)
 	info := ClientInfo{
 		IP:      meta.ClientIP,
 		ISP:     meta.ASOrganization,
@@ -65,22 +87,25 @@ func (c *CloudflareProvider) fetchMeta(ctx context.Context) (ClientInfo, string,
 		Lat:     rawToFloat(meta.Latitude),
 		Lon:     rawToFloat(meta.Longitude),
 	}
-	return info, meta.Colo, nil
+	return info, iata, coloCity, nil
 }
 
 func (c *CloudflareProvider) DiscoverClient(ctx context.Context) (ClientInfo, error) {
-	info, _, err := c.fetchMeta(ctx)
+	info, _, _, err := c.fetchMeta(ctx)
 	return info, err
 }
 
 func (c *CloudflareProvider) DiscoverServers(ctx context.Context, client ClientInfo) ([]Server, error) {
-	info, colo, err := c.fetchMeta(ctx)
-	city := info.City
+	info, iata, coloCity, err := c.fetchMeta(ctx)
+	city := coloCity
+	if city == "" {
+		city = info.City
+	}
 	if city == "" {
 		city = "Anycast Edge"
 	}
-	if colo != "" {
-		city = fmt.Sprintf("%s (%s)", city, colo)
+	if iata != "" {
+		city = fmt.Sprintf("%s (%s)", city, iata)
 	}
 	country := info.Country
 	if country == "" {

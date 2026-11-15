@@ -676,24 +676,28 @@ func (a *App) layoutDashboard(gtx layout.Context, th *material.Theme, pal AppPal
 		// Footer bar: ISP/IP + Active Server + Copy Result
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return Card(gtx, pal, unit.Dp(10), unit.Dp(12), func(gtx layout.Context) layout.Dimensions {
-				ipStr := client.IP
-				if ipStr == "" {
-					ipStr = "Auto-detect on run"
-				} else if hideIP {
-					ipStr = "•••.•••.•••.•••"
-				}
-				ispStr := client.ISP
-				if ispStr == "" {
-					ispStr = "Network"
+				clientTxt := "Client ISP: Detecting..."
+				if client.ISP != "" || client.IP != "" {
+					ipStr := client.IP
+					if ipStr == "" {
+						ipStr = "—"
+					} else if hideIP {
+						ipStr = "•••.•••.•••.•••"
+					}
+					ispStr := client.ISP
+					if ispStr == "" {
+						ispStr = "Network"
+					}
+					clientTxt = fmt.Sprintf("Client ISP: %s  ·  %s", ispStr, ipStr)
 				}
 
-				srvStr := "Auto-select optimal server (" + strings.ToUpper(prov) + ")"
+				srvStr := "Server: Auto-select (" + strings.ToUpper(prov) + ")"
 				if prov == "custom" && customURL != "" {
-					srvStr = "Custom: " + customURL
+					srvStr = "Server: Custom — " + customURL
 				} else if srv.Name != "" {
-					srvStr = srv.Name
+					srvStr = "Server: " + srv.Name
 					if srv.DistanceKM > 0 {
-						srvStr = fmt.Sprintf("%s [%.0f km]", srv.Name, srv.DistanceKM)
+						srvStr = fmt.Sprintf("Server: %s [%.0f km]", srv.Name, srv.DistanceKM)
 					}
 				}
 
@@ -702,13 +706,13 @@ func (a *App) layoutDashboard(gtx layout.Context, th *material.Theme, pal AppPal
 						return a.ui.ipToggleBtn.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 							return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-									lbl := material.Label(th, unit.Sp(12), fmt.Sprintf("%s  ·  %s", ispStr, ipStr))
+									lbl := material.Label(th, unit.Sp(12), srvStr)
 									lbl.Color = pal.TextPrimary
 									lbl.Font.Weight = font.SemiBold
 									return lbl.Layout(gtx)
 								}),
 								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-									lbl := material.Label(th, unit.Sp(11), srvStr)
+									lbl := material.Label(th, unit.Sp(11), clientTxt)
 									lbl.Color = pal.TextSecondary
 									return lbl.Layout(gtx)
 								}),

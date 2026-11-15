@@ -38,7 +38,8 @@ type ooklaConfigXML struct {
 }
 
 func (o *OoklaProvider) DiscoverClient(ctx context.Context) (ClientInfo, error) {
-	req, err := newRequest(ctx, http.MethodGet, "https://www.speedtest.net/speedtest-config.php", nil)
+	target := fmt.Sprintf("https://www.speedtest.net/speedtest-config.php?x=%d", time.Now().UnixNano())
+	req, err := newRequest(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return ClientInfo{}, err
 	}

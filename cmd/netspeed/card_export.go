@@ -180,12 +180,12 @@ func ExportResultCardPNG(res engine.Result, unitName string, pal AppPalette, hid
 	if ispStr == "" {
 		ispStr = "Network"
 	}
-	drawTextLine(img, fonts.body, footer.Min.X+18, footer.Min.Y+26, fmt.Sprintf("%s  ·  %s", ispStr, ipStr), pal.TextPrimary)
 	srvStr := fmt.Sprintf("Server: %s", res.Server.Name)
 	if res.Server.DistanceKM > 0 {
 		srvStr = fmt.Sprintf("Server: %s [%.0f km]", res.Server.Name, res.Server.DistanceKM)
 	}
-	drawTextLine(img, fonts.small, footer.Min.X+18, footer.Min.Y+48, srvStr, pal.TextSecondary)
+	drawTextLine(img, fonts.body, footer.Min.X+18, footer.Min.Y+26, srvStr, pal.TextPrimary)
+	drawTextLine(img, fonts.small, footer.Min.X+18, footer.Min.Y+48, fmt.Sprintf("Client ISP: %s  ·  %s", ispStr, ipStr), pal.TextSecondary)
 
 	durTxt := fmt.Sprintf("%.1fs test", float64(res.DurationMS)/1000.0)
 	dw := measureTextWidth(fonts.small, durTxt)
