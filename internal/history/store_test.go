@@ -91,6 +91,17 @@ func TestHistoryStoreCRUDAndExport(t *testing.T) {
 		t.Fatalf("unexpected JSON output:\n%s", jsonBuf.String())
 	}
 
+	if err := store.DeleteByID("2"); err != nil {
+		t.Fatalf("DeleteByID failed: %v", err)
+	}
+	afterDel, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load after DeleteByID failed: %v", err)
+	}
+	if len(afterDel) != 1 || afterDel[0].ID != "1" {
+		t.Fatalf("expected only entry '1' remaining after DeleteByID, got %+v", afterDel)
+	}
+
 	if err := store.Clear(); err != nil {
 		t.Fatalf("Clear failed: %v", err)
 	}

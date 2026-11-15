@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -13,7 +12,6 @@ import (
 	"time"
 
 	"gioui.org/font"
-	"gioui.org/io/clipboard"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
@@ -44,12 +42,15 @@ func (a *App) layoutFrame(gtx layout.Context) layout.Dimensions {
 		a.displayMbps += diff * 0.22
 	}
 	animating := running || math.Abs(a.targetMbps-a.displayMbps) > 0.08
-	toastActive := a.toastMsg != "" && time.Now().Before(a.toastUntil)
+	toastUntil := a.toastUntil
+	toastActive := a.toastMsg != "" && time.Now().Before(toastUntil)
 	toastMsg := a.toastMsg
 	a.mu.Unlock()
 
 	if animating {
 		gtx.Execute(op.InvalidateCmd{})
+	} else if toastActive {
+		gtx.Execute(op.InvalidateCmd{At: toastUntil})
 	}
 
 	// Fill full window background.
@@ -151,13 +152,37 @@ func (a *App) handleUIEvents(gtx layout.Context) {
 		a.mu.Unlock()
 	}
 
-	if a.ui.copyResultBtn.Clicked(gtx) {
-		summary := a.buildClipboardSummary()
-		gtx.Execute(clipboard.WriteCmd{
-			Type: "text/plain",
-			Data: io.NopCloser(strings.NewReader(summary)),
-		})
-		a.showToast("Result copied to clipboard")
+	a.mu.Lock()
+	canExport := a.lastSessionResult != nil && !a.running
+	var sessionRes engine.Result
+	if canExport {
+		sessionRes = *a.lastSessionResult
+	}
+	exportUnit := a.cfg.Unit
+	exportPal := a.pal
+	exportHideIP := a.cfg.HideIP
+	a.mu.Unlock()
+
+	if canExport && a.ui.copyResultBtn.Clicked(gtx) {
+		summary := formatResultSummary(sessionRes, exportUnit)
+		go func(txt string) {
+			if err := SetClipboardText(txt); err != nil {
+				a.showToast("Clipboard error: " + err.Error())
+				return
+			}
+			a.showToast("Result copied to clipboard")
+		}(summary)
+	}
+
+	if canExport && a.ui.saveCardBtn.Clicked(gtx) {
+		go func(r engine.Result, u string, p AppPalette, hideIP bool) {
+			outPath, err := ExportResultCardPNG(r, u, p, hideIP)
+			if err != nil {
+				a.showToast("Save card failed: " + err.Error())
+				return
+			}
+			a.showToast("Saved PNG card: " + filepath.Base(outPath))
+		}(sessionRes, exportUnit, exportPal, exportHideIP)
 	}
 
 	// Tab 1: Providers & Custom URL
@@ -168,6 +193,13 @@ func (a *App) handleUIEvents(gtx layout.Context) {
 			a.cfg.Provider = p
 			if p != "custom" {
 				a.cfg.PreferredServerID = ""
+			} else if a.cfg.CustomURL != "" {
+				a.selectedServer = engine.Server{
+					ID:       "custom-url",
+					Name:     "Custom: " + a.cfg.CustomURL,
+					Provider: engine.ProviderCustom,
+					URL:      a.cfg.CustomURL,
+				}
 			}
 			_ = config.Save(a.cfg)
 			a.mu.Unlock()
@@ -196,31 +228,48 @@ func (a *App) handleUIEvents(gtx layout.Context) {
 
 	a.mu.Lock()
 	savedCount := len(a.cfg.SavedCustomURLs)
+	if len(a.ui.savedURLBtns) < savedCount {
+		savedCount = len(a.ui.savedURLBtns)
+	}
 	a.mu.Unlock()
-	for i := 0; i < savedCount && i < len(a.ui.savedURLBtns); i++ {
+	for i := 0; i < savedCount; i++ {
 		if a.ui.savedURLBtns[i].Clicked(gtx) {
 			a.mu.Lock()
-			u := a.cfg.SavedCustomURLs[i]
+			var u string
+			if i < len(a.cfg.SavedCustomURLs) {
+				u = a.cfg.SavedCustomURLs[i]
+			}
 			a.mu.Unlock()
-			a.ui.customURLEditor.SetText(u)
-			a.applyCustomURL(u)
+			if u != "" {
+				a.ui.customURLEditor.SetText(u)
+				a.applyCustomURL(u)
+			}
 		}
 	}
 
 	a.mu.Lock()
 	srvCount := len(a.servers)
+	if len(a.ui.serverBtns) < srvCount {
+		srvCount = len(a.ui.serverBtns)
+	}
 	a.mu.Unlock()
-	for i := 0; i < srvCount && i < len(a.ui.serverBtns); i++ {
+	for i := 0; i < srvCount; i++ {
 		if a.ui.serverBtns[i].Clicked(gtx) {
 			a.mu.Lock()
-			srv := a.servers[i]
-			a.cfg.Provider = string(srv.Provider)
-			a.cfg.PreferredServerID = srv.ID
-			a.selectedServer = srv
-			_ = config.Save(a.cfg)
-			a.activeTab = 0
+			var srv engine.Server
+			ok := i < len(a.servers)
+			if ok {
+				srv = a.servers[i]
+				a.cfg.Provider = string(srv.Provider)
+				a.cfg.PreferredServerID = srv.ID
+				a.selectedServer = srv
+				_ = config.Save(a.cfg)
+				a.activeTab = 0
+			}
 			a.mu.Unlock()
-			a.showToast("Selected server: " + srv.Name)
+			if ok {
+				a.showToast("Selected server: " + srv.Name)
+			}
 		}
 	}
 
@@ -236,13 +285,25 @@ func (a *App) handleUIEvents(gtx layout.Context) {
 		}
 	}
 
-	if a.ui.applyCustomMinBtn.Clicked(gtx) {
+	applyCustomMinutes := func() {
 		if m, err := strconv.Atoi(strings.TrimSpace(a.ui.customMinEditor.Text())); err == nil && m >= 1 {
 			a.setScheduleInterval(m, true)
 			a.showToast(fmt.Sprintf("Schedule interval set to %d min", m))
 		} else {
 			a.showToast("Enter a valid interval in minutes (>= 1)")
 		}
+	}
+	for {
+		ev, ok := a.ui.customMinEditor.Update(gtx)
+		if !ok {
+			break
+		}
+		if _, submitted := ev.(widget.SubmitEvent); submitted {
+			applyCustomMinutes()
+		}
+	}
+	if a.ui.applyCustomMinBtn.Clicked(gtx) {
+		applyCustomMinutes()
 	}
 
 	if a.ui.closeToTrayBtn.Clicked(gtx) {
@@ -253,6 +314,49 @@ func (a *App) handleUIEvents(gtx layout.Context) {
 	}
 	if a.ui.hideNowBtn.Clicked(gtx) {
 		a.hideToTray()
+	}
+	if a.ui.startupToggleBtn.Clicked(gtx) {
+		a.mu.Lock()
+		target := !a.startupEnabled
+		a.mu.Unlock()
+		if err := SetStartupEnabled(target); err != nil {
+			a.showToast("Startup setting failed: " + err.Error())
+		} else {
+			a.mu.Lock()
+			a.startupEnabled = target
+			a.mu.Unlock()
+			if target {
+				a.showToast("NetSpeed will start minimized at Windows login")
+			} else {
+				a.showToast("Removed NetSpeed from Windows startup")
+			}
+		}
+	}
+	if a.ui.notifyToggleBtn.Clicked(gtx) {
+		a.mu.Lock()
+		a.cfg.TrayNotifications = !a.cfg.TrayNotifications
+		enabled := a.cfg.TrayNotifications
+		_ = config.Save(a.cfg)
+		a.mu.Unlock()
+		if enabled {
+			a.showToast("Tray notifications enabled")
+		} else {
+			a.showToast("Tray notifications disabled")
+		}
+	}
+	alertThresholds := []float64{0, 25, 50, 100, 250}
+	for i, thr := range alertThresholds {
+		if a.ui.alertThreshBtns[i].Clicked(gtx) {
+			a.mu.Lock()
+			a.cfg.AlertMinDownloadMbps = thr
+			_ = config.Save(a.cfg)
+			a.mu.Unlock()
+			if thr == 0 {
+				a.showToast("Low speed alert disabled")
+			} else {
+				a.showToast(fmt.Sprintf("Alert when Download < %.0f Mbps", thr))
+			}
+		}
 	}
 
 	threadChoices := []int{4, 8, 16, 32}
@@ -293,6 +397,54 @@ func (a *App) handleUIEvents(gtx layout.Context) {
 		_ = a.store.Clear()
 		a.reloadHistory()
 		a.showToast("Test history cleared")
+	}
+
+	a.mu.Lock()
+	histCount := len(a.historyItems)
+	if len(a.ui.histCopyBtns) < histCount {
+		histCount = len(a.ui.histCopyBtns)
+	}
+	if len(a.ui.histDeleteBtns) < histCount {
+		histCount = len(a.ui.histDeleteBtns)
+	}
+	a.mu.Unlock()
+
+	for i := 0; i < histCount; i++ {
+		if a.ui.histCopyBtns[i].Clicked(gtx) {
+			a.mu.Lock()
+			var item engine.Result
+			ok := i < len(a.historyItems)
+			if ok {
+				item = a.historyItems[i]
+			}
+			uName := a.cfg.Unit
+			a.mu.Unlock()
+			if ok {
+				go func(txt string) {
+					if err := SetClipboardText(txt); err != nil {
+						a.showToast("Clipboard error: " + err.Error())
+						return
+					}
+					a.showToast("History entry copied to clipboard")
+				}(formatResultSummary(item, uName))
+			}
+		}
+		if a.ui.histDeleteBtns[i].Clicked(gtx) {
+			a.mu.Lock()
+			var delID string
+			if i < len(a.historyItems) {
+				delID = a.historyItems[i].ID
+			}
+			a.mu.Unlock()
+			if delID != "" {
+				if err := a.store.DeleteByID(delID); err != nil {
+					a.showToast("Delete failed: " + err.Error())
+				} else {
+					a.reloadHistory()
+					a.showToast("Entry removed from history")
+				}
+			}
+		}
 	}
 }
 
@@ -415,6 +567,8 @@ func (a *App) layoutDashboard(gtx layout.Context, th *material.Theme, pal AppPal
 	unitName := a.cfg.Unit
 	pingMS := a.pingMS
 	jitterMS := a.jitterMS
+	lossPct := a.packetLossPct
+	grade := a.bufferbloatGrade
 	dlMbps := a.downloadMbps
 	ulMbps := a.uploadMbps
 	dlPing := a.downloadPingMS
@@ -429,6 +583,7 @@ func (a *App) layoutDashboard(gtx layout.Context, th *material.Theme, pal AppPal
 	prov := a.cfg.Provider
 	customURL := a.cfg.CustomURL
 	statusMsg := a.statusMsg
+	canExport := a.lastSessionResult != nil && !a.running
 	a.mu.Unlock()
 
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
@@ -461,9 +616,9 @@ func (a *App) layoutDashboard(gtx layout.Context, th *material.Theme, pal AppPal
 						if pingMS > 0 {
 							pingTxt = fmt.Sprintf("%.1f", pingMS)
 						}
-						sub := "Jitter: —"
-						if jitterMS > 0 {
-							sub = fmt.Sprintf("Jitter: %.1f ms", jitterMS)
+						sub := "Jitter: —  ·  Loss: —"
+						if pingMS > 0 {
+							sub = fmt.Sprintf("Jitter: %.1f ms  ·  Loss: %.1f%%", jitterMS, lossPct)
 						}
 						loaded := "Loaded DL / UL: —"
 						if dlPing > 0 || ulPing > 0 {
@@ -471,10 +626,20 @@ func (a *App) layoutDashboard(gtx layout.Context, th *material.Theme, pal AppPal
 						}
 						return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-								lbl := material.Label(th, unit.Sp(11), "PING & JITTER")
-								lbl.Color = pal.Ping
-								lbl.Font.Weight = font.Bold
-								return lbl.Layout(gtx)
+								return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+									layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+										lbl := material.Label(th, unit.Sp(11), "PING & JITTER")
+										lbl.Color = pal.Ping
+										lbl.Font.Weight = font.Bold
+										return lbl.Layout(gtx)
+									}),
+									layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+										if grade == "" {
+											return layout.Dimensions{}
+										}
+										return layoutGradeBadge(gtx, th, pal, grade)
+									}),
+								)
 							}),
 							layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -552,7 +717,11 @@ func (a *App) layoutDashboard(gtx layout.Context, th *material.Theme, pal AppPal
 					}),
 					layout.Rigid(layout.Spacer{Width: unit.Dp(12)}.Layout),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return PillButton(gtx, th, pal, &a.ui.copyResultBtn, "Copy Result", false, pal.Download)
+						return PillButtonEnabled(gtx, th, pal, &a.ui.copyResultBtn, "Copy Result", false, canExport, pal.Download)
+					}),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return PillButtonEnabled(gtx, th, pal, &a.ui.saveCardBtn, "Save Card PNG", false, canExport, pal.Upload)
 					}),
 				)
 			})
@@ -853,6 +1022,7 @@ func (a *App) layoutScheduleTrayView(gtx layout.Context, th *material.Theme, pal
 	cfg := a.cfg
 	nextRun := a.sched.NextRun()
 	lastSched := a.lastScheduledSummary
+	startupOn := a.startupEnabled
 	a.mu.Unlock()
 
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
@@ -865,7 +1035,12 @@ func (a *App) layoutScheduleTrayView(gtx layout.Context, th *material.Theme, pal
 				}
 				nextText := "Disabled"
 				if cfg.ScheduleEnabled && !nextRun.IsZero() {
-					nextText = nextRun.Local().Format("2006-01-02 15:04:05")
+					gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(time.Second)})
+					rem := time.Until(nextRun).Round(time.Second)
+					if rem < 0 {
+						rem = 0
+					}
+					nextText = fmt.Sprintf("%s (in %s)", nextRun.Local().Format("2006-01-02 15:04:05"), rem)
 				}
 
 				presets := []struct {
@@ -951,9 +1126,28 @@ func (a *App) layoutScheduleTrayView(gtx layout.Context, th *material.Theme, pal
 				threads := []int{4, 8, 16, 32}
 				durs := []int{5, 10, 15}
 
+				startupText := "Startup: Manual"
+				if startupOn {
+					startupText = "Startup: Launch Minimized at Login"
+				}
+				notifyText := "Tray Alerts: Off"
+				if cfg.TrayNotifications {
+					notifyText = "Tray Alerts: On"
+				}
+				alertChoices := []struct {
+					mbps  float64
+					label string
+				}{
+					{0, "Off"},
+					{25, "< 25 Mbps"},
+					{50, "< 50 Mbps"},
+					{100, "< 100 Mbps"},
+					{250, "< 250 Mbps"},
+				}
+
 				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						lbl := material.Label(th, unit.Sp(14), "System Tray & Engine Tuning")
+						lbl := material.Label(th, unit.Sp(14), "System Tray, Startup & Engine Tuning")
 						lbl.Color = pal.TextPrimary
 						lbl.Font.Weight = font.Bold
 						return lbl.Layout(gtx)
@@ -964,13 +1158,44 @@ func (a *App) layoutScheduleTrayView(gtx layout.Context, th *material.Theme, pal
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 								return PillButton(gtx, th, pal, &a.ui.closeToTrayBtn, trayText, cfg.CloseToTray, pal.Ping)
 							}),
-							layout.Rigid(layout.Spacer{Width: unit.Dp(10)}.Layout),
+							layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 								return PillButton(gtx, th, pal, &a.ui.hideNowBtn, "Minimize to Tray Now", false, pal.Download)
 							}),
 						)
 					}),
-					layout.Rigid(layout.Spacer{Height: unit.Dp(14)}.Layout),
+					layout.Rigid(layout.Spacer{Height: unit.Dp(10)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								return PillButton(gtx, th, pal, &a.ui.startupToggleBtn, startupText, startupOn, pal.Ping)
+							}),
+							layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								return PillButton(gtx, th, pal, &a.ui.notifyToggleBtn, notifyText, cfg.TrayNotifications, pal.Upload)
+							}),
+						)
+					}),
+					layout.Rigid(layout.Spacer{Height: unit.Dp(10)}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						children := []layout.FlexChild{
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								lbl := material.Label(th, unit.Sp(12), "Low Speed Alert:")
+								lbl.Color = pal.TextSecondary
+								return layout.Inset{Right: unit.Dp(10)}.Layout(gtx, lbl.Layout)
+							}),
+						}
+						for i, ac := range alertChoices {
+							idx := i
+							val := ac
+							children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								return PillButton(gtx, th, pal, &a.ui.alertThreshBtns[idx], val.label, cfg.AlertMinDownloadMbps == val.mbps, pal.Danger)
+							}))
+							children = append(children, layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout))
+						}
+						return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx, children...)
+					}),
+					layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						children := []layout.FlexChild{
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -1013,96 +1238,149 @@ func (a *App) layoutHistoryView(gtx layout.Context, th *material.Theme, pal AppP
 	a.mu.Lock()
 	items := append([]engine.Result(nil), a.historyItems...)
 	unitName := a.cfg.Unit
+	copyBtns := a.ui.histCopyBtns
+	delBtns := a.ui.histDeleteBtns
 	a.mu.Unlock()
 
-	return Card(gtx, pal, unit.Dp(12), unit.Dp(14), func(gtx layout.Context) layout.Dimensions {
-		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			if len(items) < 2 {
+				return layout.Dimensions{}
+			}
+			return layout.Inset{Bottom: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return DrawHistoryTrendChart(gtx, th, pal, items, unitName, unit.Dp(82))
+			})
+		}),
+		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			return Card(gtx, pal, unit.Dp(12), unit.Dp(14), func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+							layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+								lbl := material.Label(th, unit.Sp(14), fmt.Sprintf("Saved Test History (%d runs)", len(items)))
+								lbl.Color = pal.TextPrimary
+								lbl.Font.Weight = font.Bold
+								return lbl.Layout(gtx)
+							}),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								return PillButton(gtx, th, pal, &a.ui.exportCSVBtn, "Export CSV", false, pal.Download)
+							}),
+							layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								return PillButton(gtx, th, pal, &a.ui.clearHistoryBtn, "Clear History", false, pal.Danger)
+							}),
+						)
+					}),
+					layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
 					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-						lbl := material.Label(th, unit.Sp(14), fmt.Sprintf("Saved Test History (%d runs)", len(items)))
-						lbl.Color = pal.TextPrimary
-						lbl.Font.Weight = font.Bold
-						return lbl.Layout(gtx)
-					}),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return PillButton(gtx, th, pal, &a.ui.exportCSVBtn, "Export CSV", false, pal.Download)
-					}),
-					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return PillButton(gtx, th, pal, &a.ui.clearHistoryBtn, "Clear History", false, pal.Danger)
-					}),
-				)
-			}),
-			layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
-			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-				if len(items) == 0 {
-					return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-						lbl := material.Label(th, unit.Sp(13), "No speed tests recorded yet. Run a test from Dashboard or CLI.")
-						lbl.Color = pal.TextMuted
-						return lbl.Layout(gtx)
-					})
-				}
-				return material.List(th, &a.ui.historyList).Layout(gtx, len(items), func(gtx layout.Context, i int) layout.Dimensions {
-					r := items[i]
-					dlV, dlU := engine.FormatSpeed(r.DownloadMbps, unitName)
-					ulV, ulU := engine.FormatSpeed(r.UploadMbps, unitName)
+						if len(items) == 0 {
+							return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+								lbl := material.Label(th, unit.Sp(13), "No speed tests recorded yet. Run a test from Dashboard or CLI.")
+								lbl.Color = pal.TextMuted
+								return lbl.Layout(gtx)
+							})
+						}
+						return material.List(th, &a.ui.historyList).Layout(gtx, len(items), func(gtx layout.Context, i int) layout.Dimensions {
+							r := items[i]
+							dlV, dlU := engine.FormatSpeed(r.DownloadMbps, unitName)
+							ulV, ulU := engine.FormatSpeed(r.UploadMbps, unitName)
 
-					return layout.Inset{Bottom: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-						macro := op.Record(gtx.Ops)
-						dims := layout.Inset{Top: unit.Dp(10), Bottom: unit.Dp(10), Left: unit.Dp(12), Right: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-							return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
-								layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-									return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-										layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-											trig := strings.ToUpper(r.Trigger)
-											if trig == "" {
-												trig = "MANUAL"
-											}
-											head := fmt.Sprintf("%s  ·  %s  ·  %s", r.Timestamp.Local().Format("2006-01-02 15:04"), trig, strings.ToUpper(string(r.Provider)))
-											lbl := material.Label(th, unit.Sp(12), head)
-											lbl.Color = pal.TextPrimary
-											lbl.Font.Weight = font.SemiBold
-											return lbl.Layout(gtx)
+							return layout.Inset{Bottom: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+								macro := op.Record(gtx.Ops)
+								dims := layout.Inset{Top: unit.Dp(10), Bottom: unit.Dp(10), Left: unit.Dp(12), Right: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+									return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+										layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+											return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+												layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+													trig := strings.ToUpper(r.Trigger)
+													if trig == "" {
+														trig = "MANUAL"
+													}
+													head := fmt.Sprintf("%s  ·  %s  ·  %s", r.Timestamp.Local().Format("2006-01-02 15:04"), trig, strings.ToUpper(string(r.Provider)))
+													lbl := material.Label(th, unit.Sp(12), head)
+													lbl.Color = pal.TextPrimary
+													lbl.Font.Weight = font.SemiBold
+													return lbl.Layout(gtx)
+												}),
+												layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+													lbl := material.Label(th, unit.Sp(11), r.Server.Name)
+													lbl.Color = pal.TextSecondary
+													return lbl.Layout(gtx)
+												}),
+											)
 										}),
 										layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-											lbl := material.Label(th, unit.Sp(11), r.Server.Name)
-											lbl.Color = pal.TextSecondary
-											return lbl.Layout(gtx)
+											if r.BufferbloatGrade == "" {
+												return layout.Dimensions{}
+											}
+											return layout.Inset{Right: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+												return layoutGradeBadge(gtx, th, pal, r.BufferbloatGrade)
+											})
+										}),
+										layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+											lbl := material.Label(th, unit.Sp(12), fmt.Sprintf("Ping %.1f ms", r.PingMS))
+											lbl.Color = pal.Ping
+											lbl.Font.Weight = font.SemiBold
+											return layout.Inset{Right: unit.Dp(12)}.Layout(gtx, lbl.Layout)
+										}),
+										layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+											lbl := material.Label(th, unit.Sp(12), fmt.Sprintf("↓ %.1f %s", dlV, dlU))
+											lbl.Color = pal.Download
+											lbl.Font.Weight = font.Bold
+											return layout.Inset{Right: unit.Dp(12)}.Layout(gtx, lbl.Layout)
+										}),
+										layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+											lbl := material.Label(th, unit.Sp(12), fmt.Sprintf("↑ %.1f %s", ulV, ulU))
+											lbl.Color = pal.Upload
+											lbl.Font.Weight = font.Bold
+											return layout.Inset{Right: unit.Dp(10)}.Layout(gtx, lbl.Layout)
+										}),
+										layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+											if i >= len(copyBtns) {
+												return layout.Dimensions{}
+											}
+											return layout.Inset{Right: unit.Dp(6)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+												return PillButton(gtx, th, pal, &copyBtns[i], "Copy", false, pal.Download)
+											})
+										}),
+										layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+											if i >= len(delBtns) {
+												return layout.Dimensions{}
+											}
+											return PillButton(gtx, th, pal, &delBtns[i], "Delete", false, pal.Danger)
 										}),
 									)
-								}),
-								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-									lbl := material.Label(th, unit.Sp(12), fmt.Sprintf("Ping %.1f ms", r.PingMS))
-									lbl.Color = pal.Ping
-									lbl.Font.Weight = font.SemiBold
-									return layout.Inset{Right: unit.Dp(14)}.Layout(gtx, lbl.Layout)
-								}),
-								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-									lbl := material.Label(th, unit.Sp(12), fmt.Sprintf("↓ %.1f %s", dlV, dlU))
-									lbl.Color = pal.Download
-									lbl.Font.Weight = font.Bold
-									return layout.Inset{Right: unit.Dp(14)}.Layout(gtx, lbl.Layout)
-								}),
-								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-									lbl := material.Label(th, unit.Sp(12), fmt.Sprintf("↑ %.1f %s", ulV, ulU))
-									lbl.Color = pal.Upload
-									lbl.Font.Weight = font.Bold
-									return lbl.Layout(gtx)
-								}),
-							)
+								})
+								call := macro.Stop()
+								rr := clip.UniformRRect(image.Rectangle{Max: dims.Size}, gtx.Dp(unit.Dp(8)))
+								paint.FillShape(gtx.Ops, pal.Background, rr.Op(gtx.Ops))
+								paint.FillShape(gtx.Ops, pal.Border, clip.Stroke{Path: rr.Path(gtx.Ops), Width: 1}.Op())
+								call.Add(gtx.Ops)
+								return dims
+							})
 						})
-						call := macro.Stop()
-						rr := clip.UniformRRect(image.Rectangle{Max: dims.Size}, gtx.Dp(unit.Dp(8)))
-						paint.FillShape(gtx.Ops, pal.Background, rr.Op(gtx.Ops))
-						paint.FillShape(gtx.Ops, pal.Border, clip.Stroke{Path: rr.Path(gtx.Ops), Width: 1}.Op())
-						call.Add(gtx.Ops)
-						return dims
-					})
-				})
-			}),
-		)
+					}),
+				)
+			})
+		}),
+	)
+}
+
+func layoutGradeBadge(gtx layout.Context, th *material.Theme, pal AppPalette, grade string) layout.Dimensions {
+	col := gradeAccent(pal, grade)
+	macro := op.Record(gtx.Ops)
+	dims := layout.Inset{Top: unit.Dp(2), Bottom: unit.Dp(2), Left: unit.Dp(7), Right: unit.Dp(7)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		lbl := material.Label(th, unit.Sp(10), "Grade "+grade)
+		lbl.Color = col
+		lbl.Font.Weight = font.Bold
+		return lbl.Layout(gtx)
 	})
+	call := macro.Stop()
+	rr := clip.UniformRRect(image.Rectangle{Max: dims.Size}, gtx.Dp(unit.Dp(6)))
+	paint.FillShape(gtx.Ops, withAlpha(col, 30), rr.Op(gtx.Ops))
+	paint.FillShape(gtx.Ops, withAlpha(col, 130), clip.Stroke{Path: rr.Path(gtx.Ops), Width: 1}.Op())
+	call.Add(gtx.Ops)
+	return dims
 }
 
 func layoutEditorBox(gtx layout.Context, th *material.Theme, pal AppPalette, ed *widget.Editor, hint string) layout.Dimensions {

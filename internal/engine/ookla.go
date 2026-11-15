@@ -133,31 +133,71 @@ func (o *OoklaProvider) DiscoverServers(ctx context.Context, client ClientInfo) 
 	}
 
 	// Probe the closest 8 servers concurrently to determine real latency.
+	probeBatch := func(startIdx, endIdx int) bool {
+		if startIdx >= endIdx {
+			return false
+		}
+		var wg sync.WaitGroup
+		for i := startIdx; i < endIdx; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				probeCtx, cancel := context.WithTimeout(ctx, 2500*time.Millisecond)
+				defer cancel()
+				d, probeErr := o.ProbeLatency(probeCtx, servers[idx])
+				if probeErr == nil {
+					servers[idx].LatencyMS = Round2(float64(d) / float64(time.Millisecond))
+				} else {
+					servers[idx].LatencyMS = 9999
+				}
+			}(i)
+		}
+		wg.Wait()
+		for i := startIdx; i < endIdx; i++ {
+			if servers[i].LatencyMS > 0 && servers[i].LatencyMS < 9000 {
+				return true
+			}
+		}
+		return false
+	}
+
 	probeLimit := 8
 	if len(servers) < probeLimit {
 		probeLimit = len(servers)
 	}
-	var wg sync.WaitGroup
-	for i := 0; i < probeLimit; i++ {
-		wg.Add(1)
-		go func(idx int) {
-			defer wg.Done()
-			probeCtx, cancel := context.WithTimeout(ctx, 2500*time.Millisecond)
-			defer cancel()
-			d, probeErr := o.ProbeLatency(probeCtx, servers[idx])
-			if probeErr == nil {
-				servers[idx].LatencyMS = Round2(float64(d) / float64(time.Millisecond))
-			} else {
-				servers[idx].LatencyMS = 9999
-			}
-		}(i)
+	anyResponsive := probeBatch(0, probeLimit)
+	if !anyResponsive && len(servers) > probeLimit {
+		secondEnd := probeLimit + 6
+		if secondEnd > len(servers) {
+			secondEnd = len(servers)
+		}
+		anyResponsive = probeBatch(probeLimit, secondEnd)
 	}
-	wg.Wait()
 
-	// Keep responsive probed servers sorted by latency first, followed by remaining servers by distance.
-	sort.SliceStable(servers[:probeLimit], func(i, j int) bool {
-		return servers[i].LatencyMS < servers[j].LatencyMS
+	// Rank servers: 0 = responsive probed (lowest latency first), 1 = unprobed, 2 = failed probes.
+	latencyRank := func(lat float64) int {
+		if lat > 0 && lat < 9000 {
+			return 0
+		}
+		if lat == 0 {
+			return 1
+		}
+		return 2
+	}
+	sort.SliceStable(servers, func(i, j int) bool {
+		ri, rj := latencyRank(servers[i].LatencyMS), latencyRank(servers[j].LatencyMS)
+		if ri != rj {
+			return ri < rj
+		}
+		if ri == 0 {
+			return servers[i].LatencyMS < servers[j].LatencyMS
+		}
+		return servers[i].DistanceKM < servers[j].DistanceKM
 	})
+
+	if !anyResponsive || servers[0].LatencyMS >= 9000 || servers[0].LatencyMS <= 0 {
+		return nil, errors.New("all probed ookla servers failed latency check")
+	}
 
 	return servers, nil
 }

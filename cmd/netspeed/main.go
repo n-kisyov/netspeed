@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,6 +33,7 @@ type uiControls struct {
 	goStopBtn     widget.Clickable
 	ipToggleBtn   widget.Clickable
 	copyResultBtn widget.Clickable
+	saveCardBtn   widget.Clickable
 
 	provBtns          [4]widget.Clickable
 	refreshServersBtn widget.Clickable
@@ -47,11 +49,16 @@ type uiControls struct {
 	customMinEditor   widget.Editor
 	closeToTrayBtn    widget.Clickable
 	hideNowBtn        widget.Clickable
+	startupToggleBtn  widget.Clickable
+	notifyToggleBtn   widget.Clickable
+	alertThreshBtns   [5]widget.Clickable
 	threadBtns        [4]widget.Clickable
 	durBtns           [3]widget.Clickable
 
 	exportCSVBtn    widget.Clickable
 	clearHistoryBtn widget.Clickable
+	histCopyBtns    []widget.Clickable
+	histDeleteBtns  []widget.Clickable
 	historyList     widget.List
 }
 
@@ -82,22 +89,26 @@ type App struct {
 	targetMbps    float64
 	displayMbps   float64
 	progress      float64
-	pingMS        float64
-	jitterMS      float64
-	loadedPingMS  float64
-	downloadMbps  float64
-	uploadMbps    float64
-	downloadPingMS float64
-	uploadPingMS  float64
-	downloadBytes int64
-	uploadBytes   int64
-	dlSamples     []float64
-	ulSamples     []float64
-	clientInfo    engine.ClientInfo
-	selectedServer engine.Server
-	statusMsg     string
+	pingMS            float64
+	jitterMS          float64
+	packetLossPct     float64
+	bufferbloatGrade  string
+	loadedPingMS      float64
+	downloadMbps      float64
+	uploadMbps        float64
+	downloadPingMS    float64
+	uploadPingMS      float64
+	downloadBytes     int64
+	uploadBytes       int64
+	dlSamples         []float64
+	ulSamples         []float64
+	clientInfo        engine.ClientInfo
+	selectedServer    engine.Server
+	lastSessionResult *engine.Result
+	statusMsg         string
 
 	lastScheduledSummary string
+	startupEnabled       bool
 
 	servers        []engine.Server
 	serversLoading bool
@@ -120,14 +131,15 @@ func newApp(startMinimizedFlag bool) *App {
 	histItems, _ := store.Load()
 
 	a := &App{
-		cfg:          cfg,
-		pal:          pal,
-		th:           newMaterialTheme(pal),
-		eng:          engine.New(),
-		store:        store,
-		phase:        engine.PhaseIdle,
-		historyItems: histItems,
-		startHidden:  startMinimizedFlag || cfg.StartMinimized,
+		cfg:            cfg,
+		pal:            pal,
+		th:             newMaterialTheme(pal),
+		eng:            engine.New(),
+		store:          store,
+		phase:          engine.PhaseIdle,
+		historyItems:   histItems,
+		startHidden:    startMinimizedFlag || cfg.StartMinimized,
+		startupEnabled: IsStartupEnabled(),
 	}
 
 	a.ui.customURLEditor.SingleLine = true
@@ -135,17 +147,26 @@ func newApp(startMinimizedFlag bool) *App {
 	a.ui.customURLEditor.SetText(cfg.CustomURL)
 
 	a.ui.customMinEditor.SingleLine = true
+	a.ui.customMinEditor.Submit = true
 	a.ui.customMinEditor.Filter = "0123456789"
 	a.ui.customMinEditor.SetText(strconv.Itoa(cfg.ScheduleIntervalMinutes))
 
 	a.ui.serverList.Axis = layout.Vertical
 	a.ui.historyList.Axis = layout.Vertical
 	a.ensureSavedURLButtonsLocked()
+	a.ensureHistoryButtonsLocked()
 
-	if len(histItems) > 0 {
+	if cfg.Provider == string(engine.ProviderCustom) && cfg.CustomURL != "" {
+		a.selectedServer = engine.Server{
+			ID:       "custom-url",
+			Name:     "Custom: " + cfg.CustomURL,
+			Provider: engine.ProviderCustom,
+			URL:      cfg.CustomURL,
+		}
+	} else if len(histItems) > 0 {
 		last := histItems[0]
 		a.clientInfo = last.Client
-		if last.Server.Name != "" {
+		if last.Server.Name != "" && (cfg.PreferredServerID == "" || cfg.PreferredServerID == last.Server.ID) {
 			a.selectedServer = last.Server
 		}
 	}
@@ -178,6 +199,16 @@ func newApp(startMinimizedFlag bool) *App {
 func (a *App) ensureSavedURLButtonsLocked() {
 	if len(a.ui.savedURLBtns) < len(a.cfg.SavedCustomURLs)+2 {
 		a.ui.savedURLBtns = make([]widget.Clickable, len(a.cfg.SavedCustomURLs)+2)
+	}
+}
+
+func (a *App) ensureHistoryButtonsLocked() {
+	n := len(a.historyItems)
+	if len(a.ui.histCopyBtns) < n {
+		a.ui.histCopyBtns = make([]widget.Clickable, n)
+	}
+	if len(a.ui.histDeleteBtns) < n {
+		a.ui.histDeleteBtns = make([]widget.Clickable, n)
 	}
 }
 
@@ -297,6 +328,7 @@ func (a *App) showToast(msg string) {
 	a.mu.Unlock()
 	if win != nil {
 		win.Invalidate()
+		time.AfterFunc(3100*time.Millisecond, win.Invalidate)
 	}
 }
 
@@ -307,6 +339,7 @@ func (a *App) reloadHistory() {
 	}
 	a.mu.Lock()
 	a.historyItems = items
+	a.ensureHistoryButtonsLocked()
 	win := a.win
 	a.mu.Unlock()
 	if win != nil {
@@ -348,8 +381,20 @@ func (a *App) refreshServersAsync() {
 			if client.IP != "" {
 				a.clientInfo = client
 			}
-			if a.selectedServer.Name == "" && len(servers) > 0 {
-				a.selectedServer = servers[0]
+			if a.cfg.PreferredServerID != "" {
+				for _, s := range servers {
+					if s.ID == a.cfg.PreferredServerID {
+						a.selectedServer = s
+						break
+					}
+				}
+			}
+			if a.cfg.Provider != string(engine.ProviderCustom) && len(servers) > 0 {
+				mismatch := a.selectedServer.Name == "" ||
+					(a.cfg.Provider != "auto" && string(a.selectedServer.Provider) != a.cfg.Provider)
+				if mismatch {
+					a.selectedServer = servers[0]
+				}
 			}
 		}
 		w := a.win
@@ -385,6 +430,8 @@ func (a *App) startTest(trigger string) {
 	a.progress = 0
 	a.pingMS = 0
 	a.jitterMS = 0
+	a.packetLossPct = 0
+	a.bufferbloatGrade = ""
 	a.loadedPingMS = 0
 	a.downloadMbps = 0
 	a.uploadMbps = 0
@@ -431,6 +478,9 @@ func (a *App) startTest(trigger string) {
 				a.pingMS = ev.PingMS
 				a.jitterMS = ev.JitterMS
 			}
+			if ev.Phase == engine.PhasePing && ev.Progress >= 1 {
+				a.packetLossPct = ev.PacketLossPct
+			}
 			if ev.LoadedPingMS > 0 {
 				a.loadedPingMS = ev.LoadedPingMS
 			}
@@ -462,6 +512,8 @@ func (a *App) startTest(trigger string) {
 					a.uploadBytes = ev.Result.UploadBytes
 					a.downloadPingMS = ev.Result.DownloadPingMS
 					a.uploadPingMS = ev.Result.UploadPingMS
+					a.packetLossPct = ev.Result.PacketLossPct
+					a.bufferbloatGrade = ev.Result.BufferbloatGrade
 				}
 			}
 			if ev.Message != "" {
@@ -488,6 +540,10 @@ func (a *App) startTest(trigger string) {
 			}
 		} else {
 			a.phase = engine.PhaseDone
+			resCopy := res
+			a.lastSessionResult = &resCopy
+			a.packetLossPct = res.PacketLossPct
+			a.bufferbloatGrade = res.BufferbloatGrade
 			a.statusMsg = fmt.Sprintf("Completed (%s) in %.1fs", res.Trigger, float64(res.DurationMS)/1000.0)
 			if trigger == "scheduled" {
 				a.lastScheduledSummary = fmt.Sprintf("%s · ↓ %.1f Mbps · ↑ %.1f Mbps · %.1f ms",
@@ -495,6 +551,8 @@ func (a *App) startTest(trigger string) {
 			}
 		}
 		unitName := a.cfg.Unit
+		trayNotify := a.cfg.TrayNotifications
+		alertMin := a.cfg.AlertMinDownloadMbps
 		w := a.win
 		a.mu.Unlock()
 
@@ -504,6 +562,25 @@ func (a *App) startTest(trigger string) {
 			dlV, dlU := engine.FormatSpeed(res.DownloadMbps, unitName)
 			ulV, ulU := engine.FormatSpeed(res.UploadMbps, unitName)
 			a.tray.UpdateTooltip(fmt.Sprintf("NetSpeed — ↓ %.1f %s | ↑ %.1f %s | %.0f ms", dlV, dlU, ulV, ulU, res.PingMS))
+			if trayNotify {
+				if alertMin > 0 && res.DownloadMbps < alertMin {
+					a.tray.ShowNotification(
+						"NetSpeed — Low Speed Alert",
+						fmt.Sprintf("Download %.1f Mbps is below %.0f Mbps threshold (Ping %.0f ms)", res.DownloadMbps, alertMin, res.PingMS),
+						true,
+					)
+				} else if trigger == "scheduled" {
+					gradeTxt := res.BufferbloatGrade
+					if gradeTxt == "" {
+						gradeTxt = "N/A"
+					}
+					a.tray.ShowNotification(
+						"NetSpeed — Scheduled Test Complete",
+						fmt.Sprintf("DL %.1f %s | UL %.1f %s | Ping %.0f ms (Grade %s)", dlV, dlU, ulV, ulU, res.PingMS, gradeTxt),
+						false,
+					)
+				}
+			}
 		} else {
 			a.tray.UpdateTooltip("NetSpeed — Ready")
 		}
@@ -514,18 +591,37 @@ func (a *App) startTest(trigger string) {
 	}()
 }
 
-func (a *App) buildClipboardSummary() string {
+func formatResultSummary(r engine.Result, unitName string) string {
+	dlV, dlU := engine.FormatSpeed(r.DownloadMbps, unitName)
+	ulV, ulU := engine.FormatSpeed(r.UploadMbps, unitName)
+	trig := r.Trigger
+	if trig == "" {
+		trig = "manual"
+	}
+	grade := r.BufferbloatGrade
+	if grade == "" {
+		grade = "—"
+	}
+	return fmt.Sprintf(
+		"NetSpeed Result (%s)\r\nTime: %s\r\nProvider: %s\r\nServer: %s\r\nIdle Ping: %.2f ms (Jitter: %.2f ms, Loss: %.1f%%)\r\nBufferbloat Grade: %s\r\nDownload: %.2f %s (Loaded Ping: %.1f ms)\r\nUpload: %.2f %s (Loaded Ping: %.1f ms)\r\n",
+		strings.ToUpper(trig),
+		r.Timestamp.Local().Format("2006-01-02 15:04:05"),
+		strings.ToUpper(string(r.Provider)),
+		r.Server.Name,
+		r.PingMS, r.JitterMS, r.PacketLossPct,
+		grade,
+		dlV, dlU, r.DownloadPingMS,
+		ulV, ulU, r.UploadPingMS,
+	)
+}
+
+func (a *App) buildClipboardSummary() (string, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	dlV, dlU := engine.FormatSpeed(a.downloadMbps, a.cfg.Unit)
-	ulV, ulU := engine.FormatSpeed(a.uploadMbps, a.cfg.Unit)
-	return fmt.Sprintf(
-		"NetSpeed Result\nServer: %s\nPing: %.2f ms (Jitter: %.2f ms)\nDownload: %.2f %s (Loaded Ping: %.1f ms)\nUpload: %.2f %s (Loaded Ping: %.1f ms)\n",
-		a.selectedServer.Name,
-		a.pingMS, a.jitterMS,
-		dlV, dlU, a.downloadPingMS,
-		ulV, ulU, a.uploadPingMS,
-	)
+	if a.lastSessionResult == nil {
+		return "", false
+	}
+	return formatResultSummary(*a.lastSessionResult, a.cfg.Unit), true
 }
 
 func (a *App) runWindowLoop() error {

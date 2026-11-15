@@ -84,6 +84,23 @@ func (s *Store) Append(res engine.Result) error {
 	return s.saveLocked(updated)
 }
 
+// DeleteByID removes the entry with matching ID and persists the updated history.
+func (s *Store) DeleteByID(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	items, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	filtered := make([]engine.Result, 0, len(items))
+	for _, r := range items {
+		if r.ID != id {
+			filtered = append(filtered, r)
+		}
+	}
+	return s.saveLocked(filtered)
+}
+
 // Clear removes all saved history entries.
 func (s *Store) Clear() error {
 	s.mu.Lock()
@@ -132,7 +149,7 @@ func (s *Store) ExportCSV(w io.Writer) error {
 	cw := csv.NewWriter(w)
 	header := []string{
 		"timestamp", "trigger", "provider", "server_name", "server_city", "server_country",
-		"ip", "isp", "ping_ms", "jitter_ms", "dl_ping_ms", "ul_ping_ms",
+		"ip", "isp", "ping_ms", "jitter_ms", "packet_loss_pct", "dl_ping_ms", "ul_ping_ms", "bufferbloat_grade",
 		"download_mbps", "upload_mbps", "download_bytes", "upload_bytes", "duration_ms",
 	}
 	if err := cw.Write(header); err != nil {
@@ -150,8 +167,10 @@ func (s *Store) ExportCSV(w io.Writer) error {
 			r.Client.ISP,
 			fmt.Sprintf("%.2f", r.PingMS),
 			fmt.Sprintf("%.2f", r.JitterMS),
+			fmt.Sprintf("%.2f", r.PacketLossPct),
 			fmt.Sprintf("%.2f", r.DownloadPingMS),
 			fmt.Sprintf("%.2f", r.UploadPingMS),
+			r.BufferbloatGrade,
 			fmt.Sprintf("%.2f", r.DownloadMbps),
 			fmt.Sprintf("%.2f", r.UploadMbps),
 			fmt.Sprintf("%d", r.DownloadBytes),

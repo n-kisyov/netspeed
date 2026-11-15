@@ -141,3 +141,24 @@ func TestEngineRunCustomHTTPServer(t *testing.T) {
 		t.Fatalf("expected final phase PhaseDone, got %v", phases)
 	}
 }
+
+func TestComputeBufferbloatGrade(t *testing.T) {
+	tests := []struct {
+		idle, dl, ul float64
+		want         string
+	}{
+		{0, 20, 20, ""},
+		{15, 18, 19, "A+"},
+		{15, 28, 22, "A"},
+		{15, 40, 32, "B"},
+		{15, 65, 45, "C"},
+		{15, 110, 90, "D"},
+		{15, 200, 120, "F"},
+		{20, 0, 0, "A+"},
+	}
+	for _, tc := range tests {
+		if got := ComputeBufferbloatGrade(tc.idle, tc.dl, tc.ul); got != tc.want {
+			t.Errorf("ComputeBufferbloatGrade(%v,%v,%v) = %q, want %q", tc.idle, tc.dl, tc.ul, got, tc.want)
+		}
+	}
+}

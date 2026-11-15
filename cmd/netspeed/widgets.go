@@ -421,22 +421,30 @@ func Card(gtx layout.Context, pal AppPalette, radiusDp, padDp unit.Dp, w layout.
 
 // PillButton draws a clean rounded clickable button.
 func PillButton(gtx layout.Context, th *material.Theme, pal AppPalette, btn *widget.Clickable, label string, active bool, accent color.NRGBA) layout.Dimensions {
-	return btn.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+	return PillButtonEnabled(gtx, th, pal, btn, label, active, true, accent)
+}
+
+// PillButtonEnabled draws a pill button that can be enabled or visually disabled.
+func PillButtonEnabled(gtx layout.Context, th *material.Theme, pal AppPalette, btn *widget.Clickable, label string, active bool, enabled bool, accent color.NRGBA) layout.Dimensions {
+	drawBody := func(gtx layout.Context, hovered bool) layout.Dimensions {
 		bg := pal.Surface
 		fg := pal.TextSecondary
 		border := pal.Border
 
-		if btn.Hovered() && !active {
-			bg = pal.Elevated
-			fg = pal.TextPrimary
-		}
-		if active {
+		if !enabled {
+			bg = withAlpha(pal.Surface, 140)
+			fg = withAlpha(pal.TextMuted, 130)
+			border = withAlpha(pal.Border, 120)
+		} else if active {
 			bg = withAlpha(accent, 36)
 			if !pal.Dark {
 				bg = withAlpha(accent, 26)
 			}
 			fg = accent
 			border = withAlpha(accent, 140)
+		} else if hovered {
+			bg = pal.Elevated
+			fg = pal.TextPrimary
 		}
 
 		macro := op.Record(gtx.Ops)
@@ -456,6 +464,13 @@ func PillButton(gtx layout.Context, th *material.Theme, pal AppPalette, btn *wid
 		}.Op())
 		call.Add(gtx.Ops)
 		return dims
+	}
+
+	if !enabled {
+		return drawBody(gtx, false)
+	}
+	return btn.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return drawBody(gtx, btn.Hovered())
 	})
 }
 
@@ -479,5 +494,150 @@ func SolidButton(gtx layout.Context, th *material.Theme, pal AppPalette, btn *wi
 		paint.FillShape(gtx.Ops, bg, rr.Op(gtx.Ops))
 		call.Add(gtx.Ops)
 		return dims
+	})
+}
+
+// DrawHistoryTrendChart plots Download, Upload, and Ping trends across up to the last 30 runs.
+func DrawHistoryTrendChart(gtx layout.Context, th *material.Theme, pal AppPalette, items []engine.Result, unitName string, heightDp unit.Dp) layout.Dimensions {
+	// items arrives newest-first; take up to 30 and reverse to chronological order.
+	n := len(items)
+	if n > 30 {
+		n = 30
+	}
+	chrono := make([]engine.Result, n)
+	for i := 0; i < n; i++ {
+		chrono[i] = items[n-1-i]
+	}
+
+	return Card(gtx, pal, unit.Dp(12), unit.Dp(12), func(gtx layout.Context) layout.Dimensions {
+		if n < 2 {
+			lbl := material.Label(th, unit.Sp(12), "Run at least 2 speed tests to view Download / Upload / Ping trends.")
+			lbl.Color = pal.TextMuted
+			return lbl.Layout(gtx)
+		}
+
+		maxSpeed := 1.0
+		maxPing := 1.0
+		_, unitLbl := engine.FormatSpeed(100, unitName)
+		for _, r := range chrono {
+			dlV, _ := engine.FormatSpeed(r.DownloadMbps, unitName)
+			ulV, _ := engine.FormatSpeed(r.UploadMbps, unitName)
+			if dlV > maxSpeed {
+				maxSpeed = dlV
+			}
+			if ulV > maxSpeed {
+				maxSpeed = ulV
+			}
+			if r.PingMS > maxPing {
+				maxPing = r.PingMS
+			}
+		}
+		maxSpeed *= 1.12
+		maxPing *= 1.25
+
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+						lbl := material.Label(th, unit.Sp(12), fmt.Sprintf("RECENT TREND (LAST %d RUNS · MAX %.0f %s)", n, maxSpeed/1.12, unitLbl))
+						lbl.Color = pal.TextSecondary
+						lbl.Font.Weight = font.Bold
+						return lbl.Layout(gtx)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						lbl := material.Label(th, unit.Sp(11), "— Download")
+						lbl.Color = pal.Download
+						lbl.Font.Weight = font.SemiBold
+						return layout.Inset{Right: unit.Dp(12)}.Layout(gtx, lbl.Layout)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						lbl := material.Label(th, unit.Sp(11), "— Upload")
+						lbl.Color = pal.Upload
+						lbl.Font.Weight = font.SemiBold
+						return layout.Inset{Right: unit.Dp(12)}.Layout(gtx, lbl.Layout)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						lbl := material.Label(th, unit.Sp(11), "— Ping")
+						lbl.Color = pal.Ping
+						lbl.Font.Weight = font.SemiBold
+						return lbl.Layout(gtx)
+					}),
+				)
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				w := gtx.Constraints.Max.X
+				if w <= 0 {
+					w = gtx.Dp(unit.Dp(400))
+				}
+				h := gtx.Dp(heightDp)
+				if h <= 0 {
+					h = gtx.Dp(unit.Dp(88))
+				}
+
+				// Horizontal grid lines at 25%, 50%, 75%, 100%.
+				for g := 0; g <= 3; g++ {
+					gy := float32(h) * float32(g) / 3.0
+					if g == 3 {
+						gy = float32(h - 1)
+					}
+					var gp clip.Path
+					gp.Begin(gtx.Ops)
+					gp.MoveTo(f32.Pt(0, gy))
+					gp.LineTo(f32.Pt(float32(w), gy))
+					paint.FillShape(gtx.Ops, withAlpha(pal.Border, 140), clip.Stroke{Path: gp.End(), Width: 1}.Op())
+				}
+
+				plotSeries := func(vals []float64, maxVal float64, col color.NRGBA, strokeWidthDp unit.Dp, fillArea bool) {
+					pts := make([]f32.Point, len(vals))
+					pad := float32(gtx.Dp(unit.Dp(4)))
+					usable := float32(h) - pad*2
+					for i, v := range vals {
+						x := float32(i) / float32(len(vals)-1) * float32(w)
+						y := pad + usable*float32(1.0-v/maxVal)
+						pts[i] = f32.Pt(x, y)
+					}
+					if fillArea {
+						var area clip.Path
+						area.Begin(gtx.Ops)
+						area.MoveTo(f32.Pt(0, float32(h)))
+						for _, pt := range pts {
+							area.LineTo(pt)
+						}
+						area.LineTo(f32.Pt(float32(w), float32(h)))
+						area.Close()
+						paint.FillShape(gtx.Ops, withAlpha(col, 24), clip.Outline{Path: area.End()}.Op())
+					}
+					var line clip.Path
+					line.Begin(gtx.Ops)
+					line.MoveTo(pts[0])
+					for _, pt := range pts[1:] {
+						line.LineTo(pt)
+					}
+					paint.FillShape(gtx.Ops, col, clip.Stroke{
+						Path:  line.End(),
+						Width: float32(gtx.Dp(strokeWidthDp)),
+					}.Op())
+					for _, pt := range pts {
+						fillDot(gtx.Ops, pt, float32(gtx.Dp(unit.Dp(2.5))), col)
+					}
+				}
+
+				dlVals := make([]float64, n)
+				ulVals := make([]float64, n)
+				pingVals := make([]float64, n)
+				for i, r := range chrono {
+					dlVals[i], _ = engine.FormatSpeed(r.DownloadMbps, unitName)
+					ulVals[i], _ = engine.FormatSpeed(r.UploadMbps, unitName)
+					pingVals[i] = r.PingMS
+				}
+
+				plotSeries(pingVals, maxPing, withAlpha(pal.Ping, 190), unit.Dp(1.5), false)
+				plotSeries(ulVals, maxSpeed, pal.Upload, unit.Dp(2), true)
+				plotSeries(dlVals, maxSpeed, pal.Download, unit.Dp(2), true)
+
+				return layout.Dimensions{Size: image.Pt(w, h)}
+			}),
+		)
 	})
 }

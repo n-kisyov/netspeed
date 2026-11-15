@@ -7,19 +7,20 @@ Minimalist Windows 11 internet speed test desktop application (`netspeed.exe`) a
 - **Speedtest.net (Ookla) & Cloudflare Providers**: Discovers ISP, public IP, and nearby servers, probes latency concurrently, and automatically falls back to Cloudflare Edge if Ookla endpoints are unavailable.
 - **Custom Server URL Support**: Point either the GUI or CLI (`--url`) at any HTTP/HTTPS speed test endpoint or custom Ookla server URL (`/upload.php`).
 - **Complete Metrics**:
-  - Idle Ping & RFC-style Jitter (`ms`)
-  - Loaded Download & Upload Ping (bufferbloat indicator)
+  - Idle Ping, RFC-style Jitter (`ms`), and **Packet Loss (`%`)**
+  - Loaded Download & Upload Ping with **Bufferbloat Quality Grade (`A+`–`F`)**
   - Multi-threaded Download & Upload Throughput (`Mbps`, `MB/s`, `Kbps`) using Ookla-style slow-start trimming and trimmed-mean aggregation
   - Live EMA-smoothed throughput curves
 - **Pure Go GPU Desktop GUI (`netspeed.exe`)**:
   - Minimalist Dark & Light themes with native Windows 11 DWM titlebar synchronization (`dwmapi.dll`)
   - Custom 240° GPU vector speedometer gauge & live area sparklines
-  - Windows 11 **System Tray Mode** (`Shell_NotifyIconW`) with minimize/close-to-tray, live speed tooltip, and tray context menu
-  - **Scheduled Background Tests** (`15m`, `30m`, `1h`, `6h`, `24h`, or custom minutes) that continue running while minimized to tray
-  - Shared test history & CSV export
+  - Session-aware **Copy Result** (Win32 UTF-16 clipboard) & **Save Card PNG** shareable dark/light image export
+  - Windows 11 **System Tray Mode** (`Shell_NotifyIconW`) with minimize/close-to-tray, live speed tooltip, **Launch at Windows Login**, and **Tray Balloon Alerts** (scheduled completions & low-speed threshold alerts)
+  - **Scheduled Background Tests** (`15m`, `30m`, `1h`, `6h`, `24h`, or custom minutes) with live countdown that continue running while minimized to tray
+  - Shared test history with **Recent Trend Graph**, per-entry Copy/Delete actions, and CSV export
 - **Command-Line Tool (`netspeed-cli.exe`)**:
   - Live ANSI terminal progress bar & sparkline
-  - Machine-readable `--json`, `--csv`, and `--simple` outputs
+  - Machine-readable `--json` and `--csv` outputs (for speed runs, `--history`, and `--list`), plus `--simple`
   - Built-in `--schedule <duration>` loop and `--history` viewer shared with the GUI
 
 ## Repository Structure
@@ -63,8 +64,11 @@ internal/
 .\bin\netspeed-cli.exe --csv --csv-header
 .\bin\netspeed-cli.exe --simple
 
-# View or clear shared GUI/CLI test history
+# View, export, or clear shared GUI/CLI test history
 .\bin\netspeed-cli.exe --history
+.\bin\netspeed-cli.exe --history --json
+.\bin\netspeed-cli.exe --history --csv
+.\bin\netspeed-cli.exe --list --json
 .\bin\netspeed-cli.exe --clear-history
 
 # Scheduled continuous CLI mode

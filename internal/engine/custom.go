@@ -95,13 +95,24 @@ func (c *CustomProvider) Type() ProviderType {
 }
 
 func (c *CustomProvider) DiscoverClient(ctx context.Context) (ClientInfo, error) {
-	// Best-effort client metadata lookup via Cloudflare meta (does not fail custom test if offline from internet).
+	// Best-effort client metadata lookup via Cloudflare meta, then Ookla config;
+	// never fail a custom endpoint test if offline from the public internet.
 	cf := NewCloudflareProvider(c.client)
-	info, err := cf.DiscoverClient(ctx)
-	if err != nil {
-		return ClientInfo{IP: "Local / Custom", ISP: "Custom Endpoint"}, nil
+	if info, err := cf.DiscoverClient(ctx); err == nil && info.IP != "" {
+		return info, nil
 	}
-	return info, nil
+	ookla := NewOoklaProvider(c.client)
+	if info, err := ookla.DiscoverClient(ctx); err == nil && info.IP != "" {
+		return info, nil
+	}
+	return ClientInfo{IP: "Local / Custom", ISP: "Custom Endpoint"}, nil
+}
+
+// IsGenericMode reports whether the custom endpoint uses generic HTTP mode rather than Ookla/Cloudflare protocol.
+func (c *CustomProvider) IsGenericMode() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.mode == customModeGeneric
 }
 
 func (c *CustomProvider) DiscoverServers(ctx context.Context, client ClientInfo) ([]Server, error) {

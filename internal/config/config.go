@@ -23,6 +23,8 @@ type Config struct {
 	StartMinimized          bool     `json:"start_minimized"`
 	ScheduleEnabled         bool     `json:"schedule_enabled"`
 	ScheduleIntervalMinutes int      `json:"schedule_interval_minutes"`
+	TrayNotifications       bool     `json:"tray_notifications"`
+	AlertMinDownloadMbps    float64  `json:"alert_min_download_mbps,omitempty"`
 }
 
 var ioMu sync.Mutex
@@ -40,6 +42,8 @@ func Default() Config {
 		StartMinimized:          false,
 		ScheduleEnabled:         false,
 		ScheduleIntervalMinutes: 60,
+		TrayNotifications:       true,
+		AlertMinDownloadMbps:    0,
 	}
 }
 
@@ -128,6 +132,9 @@ func normalize(cfg *Config) {
 	}
 	if cfg.ScheduleIntervalMinutes < 1 {
 		cfg.ScheduleIntervalMinutes = 60
+	}
+	if cfg.AlertMinDownloadMbps < 0 {
+		cfg.AlertMinDownloadMbps = 0
 	}
 }
 

@@ -111,6 +111,20 @@ func main() {
 	}
 
 	if opts.showHistory {
+		if opts.jsonOut {
+			if err := store.ExportJSON(os.Stdout); err != nil {
+				fmt.Fprintf(os.Stderr, "failed to export history as JSON: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+		if opts.csvOut {
+			if err := store.ExportCSV(os.Stdout); err != nil {
+				fmt.Fprintf(os.Stderr, "failed to export history as CSV: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
 		if err := printHistory(store, opts.unit); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to read history: %v\n", err)
 			os.Exit(1)
@@ -120,6 +134,23 @@ func main() {
 
 	if opts.listServers {
 		prov := engine.ProviderType(strings.ToLower(strings.TrimSpace(opts.provider)))
+		if opts.jsonOut {
+			client, servers, err := eng.ListServers(ctx, prov)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "server discovery failed: %v\n", err)
+				os.Exit(1)
+			}
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			if err := enc.Encode(struct {
+				Client  engine.ClientInfo `json:"client"`
+				Servers []engine.Server   `json:"servers"`
+			}{Client: client, Servers: servers}); err != nil {
+				fmt.Fprintf(os.Stderr, "failed to encode servers JSON: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
 		if err := listServersCmd(ctx, eng, prov); err != nil {
 			fmt.Fprintf(os.Stderr, "server discovery failed: %v\n", err)
 			os.Exit(1)
@@ -208,7 +239,7 @@ func executeSingleRun(ctx context.Context, eng *engine.Engine, store *history.St
 	case opts.csvOut:
 		cw := csv.NewWriter(os.Stdout)
 		if opts.csvHeader {
-			_ = cw.Write([]string{"timestamp", "provider", "server", "ping_ms", "jitter_ms", "download_mbps", "upload_mbps", "download_bytes", "upload_bytes"})
+			_ = cw.Write([]string{"timestamp", "provider", "server", "ping_ms", "jitter_ms", "packet_loss_pct", "bufferbloat_grade", "download_mbps", "upload_mbps", "download_bytes", "upload_bytes"})
 		}
 		_ = cw.Write([]string{
 			res.Timestamp.Format(time.RFC3339),
@@ -216,6 +247,8 @@ func executeSingleRun(ctx context.Context, eng *engine.Engine, store *history.St
 			res.Server.Name,
 			fmt.Sprintf("%.2f", res.PingMS),
 			fmt.Sprintf("%.2f", res.JitterMS),
+			fmt.Sprintf("%.2f", res.PacketLossPct),
+			res.BufferbloatGrade,
 			fmt.Sprintf("%.2f", res.DownloadMbps),
 			fmt.Sprintf("%.2f", res.UploadMbps),
 			fmt.Sprintf("%d", res.DownloadBytes),
@@ -226,7 +259,11 @@ func executeSingleRun(ctx context.Context, eng *engine.Engine, store *history.St
 	case opts.simpleOut:
 		dlVal, dlUnit := engine.FormatSpeed(res.DownloadMbps, opts.unit)
 		ulVal, ulUnit := engine.FormatSpeed(res.UploadMbps, opts.unit)
-		fmt.Printf("Ping: %.2f ms (Jitter: %.2f ms)\n", res.PingMS, res.JitterMS)
+		gradePart := ""
+		if res.BufferbloatGrade != "" {
+			gradePart = fmt.Sprintf(", Grade: %s", res.BufferbloatGrade)
+		}
+		fmt.Printf("Ping: %.2f ms (Jitter: %.2f ms, Loss: %.1f%%%s)\n", res.PingMS, res.JitterMS, res.PacketLossPct, gradePart)
 		fmt.Printf("Download: %.2f %s\n", dlVal, dlUnit)
 		fmt.Printf("Upload: %.2f %s\n", ulVal, ulUnit)
 		return nil

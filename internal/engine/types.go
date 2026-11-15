@@ -75,8 +75,9 @@ type Result struct {
 	JitterMS        float64      `json:"jitter_ms"`
 	DownloadPingMS  float64      `json:"download_ping_ms"`
 	UploadPingMS    float64      `json:"upload_ping_ms"`
-	PacketLossPct   float64      `json:"packet_loss_pct"`
-	DownloadMbps    float64      `json:"download_mbps"`
+	PacketLossPct    float64      `json:"packet_loss_pct"`
+	BufferbloatGrade string       `json:"bufferbloat_grade,omitempty"`
+	DownloadMbps     float64      `json:"download_mbps"`
 	UploadMbps      float64      `json:"upload_mbps"`
 	DownloadBytes   int64        `json:"download_bytes"`
 	UploadBytes     int64        `json:"upload_bytes"`
@@ -104,6 +105,8 @@ type ProgressEvent struct {
 	Progress         float64 // 0.0 .. 1.0 within active phase
 	PingMS           float64
 	JitterMS         float64
+	PacketLossPct    float64
+	BufferbloatGrade string
 	LoadedPingMS     float64
 	DownloadMbps     float64
 	UploadMbps       float64

@@ -101,11 +101,12 @@ func (u *terminalUI) onProgress(ev engine.ProgressEvent) {
 		}
 	case engine.PhasePing:
 		if ev.Progress >= 1 {
-			fmt.Printf("\r  %-11s %s   Jitter: %s%s\n",
+			fmt.Printf("\r  %-11s %s   Jitter: %s   Loss: %s%s\n",
 				u.c(ansiGreen, "Idle Ping:"),
 				u.c(ansiBold, fmt.Sprintf("%.2f ms", ev.PingMS)),
 				u.c(ansiBold, fmt.Sprintf("%.2f ms", ev.JitterMS)),
-				strings.Repeat(" ", 20))
+				u.c(ansiBold, fmt.Sprintf("%.1f%%", ev.PacketLossPct)),
+				strings.Repeat(" ", 16))
 			u.lastPhase = engine.PhasePing
 		} else if u.lastPhase != engine.PhasePing {
 			fmt.Printf("\r  %s%s", u.c(ansiGreen, "Measuring ping & jitter..."), strings.Repeat(" ", 25))
@@ -162,8 +163,12 @@ func (u *terminalUI) printSummary(res engine.Result) {
 	fmt.Printf("  │ %-16s %8.2f %-26s │\n", "Download:", dlVal, fmt.Sprintf("%s  (%.1f MB)", dlUnit, dlMB))
 	fmt.Printf("  │ %-16s %8.2f %-26s │\n", "Upload:", ulVal, fmt.Sprintf("%s  (%.1f MB)", ulUnit, ulMB))
 	fmt.Printf("  │ %-16s %8.2f %-26s │\n", "Idle Ping:", res.PingMS, fmt.Sprintf("ms  (Jitter: %.2f ms)", res.JitterMS))
+	fmt.Printf("  │ %-16s %8.1f %-26s │\n", "Packet Loss:", res.PacketLossPct, "%")
 	if res.DownloadPingMS > 0 || res.UploadPingMS > 0 {
 		fmt.Printf("  │ %-16s  DL: %.1f ms  ·  UL: %.1f ms%-11s │\n", "Loaded Ping:", res.DownloadPingMS, res.UploadPingMS, "")
+	}
+	if res.BufferbloatGrade != "" {
+		fmt.Printf("  │ %-16s %-35s │\n", "Quality Grade:", fmt.Sprintf("%s (Bufferbloat)", res.BufferbloatGrade))
 	}
 	fmt.Println("  ├──────────────────────────────────────────────────────┤")
 	fmt.Printf("  │ %-16s %-35.35s │\n", "Provider:", string(res.Provider))

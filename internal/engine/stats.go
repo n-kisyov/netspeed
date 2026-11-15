@@ -53,6 +53,33 @@ func ComputePingAndJitter(rtts []time.Duration) (minMS, avgMS, jitterMS float64)
 	return minMS, avgMS, jitterMS
 }
 
+// ComputeBufferbloatGrade assigns a Waveform-style bufferbloat grade ("A+" to "F")
+// based on latency increase under download/upload load relative to idle ping.
+func ComputeBufferbloatGrade(idlePingMS, dlLoadedPingMS, ulLoadedPingMS float64) string {
+	if idlePingMS <= 0 {
+		return ""
+	}
+	maxLoaded := math.Max(dlLoadedPingMS, ulLoadedPingMS)
+	delta := 0.0
+	if maxLoaded > 0 {
+		delta = math.Max(0, maxLoaded-idlePingMS)
+	}
+	switch {
+	case delta <= 5:
+		return "A+"
+	case delta <= 15:
+		return "A"
+	case delta <= 30:
+		return "B"
+	case delta <= 60:
+		return "C"
+	case delta <= 150:
+		return "D"
+	default:
+		return "F"
+	}
+}
+
 // ComputeTrimmedMeanMbps implements an Ookla-style trimmed mean over fixed-interval bucket samples.
 // It trims the initial 15% TCP slow-start ramp-up, then discards the lowest 10% and highest 5% of
 // the remaining sorted samples before averaging.

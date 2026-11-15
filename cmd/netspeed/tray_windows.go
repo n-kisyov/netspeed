@@ -46,12 +46,13 @@ const (
 	wmSetIcon        = 0x0080
 	wmUser           = 0x0400
 	wmTrayCallback   = wmUser + 1
-	wmUpdateTip      = wmUser + 2
-	wmQuitTray       = wmUser + 3
-	wmLButtonUp      = 0x0202
-	wmLButtonDblClk  = 0x0203
-	wmRButtonUp      = 0x0205
-	wmContextMenu    = 0x007B
+	wmUpdateTip     = wmUser + 2
+	wmQuitTray      = wmUser + 3
+	wmShowBalloon   = wmUser + 4
+	wmLButtonUp     = 0x0202
+	wmLButtonDblClk = 0x0203
+	wmRButtonUp     = 0x0205
+	wmContextMenu   = 0x007B
 
 	nimAdd           = 0x00000000
 	nimModify        = 0x00000001
@@ -59,6 +60,9 @@ const (
 	nifMessage       = 0x00000001
 	nifIcon          = 0x00000002
 	nifTip           = 0x00000004
+	nifInfo          = 0x00000010
+	niifInfo         = 0x00000001
+	niifWarning      = 0x00000002
 
 	mfString         = 0x0000
 	mfChecked        = 0x0008
@@ -162,13 +166,16 @@ type TrayHooks struct {
 
 // TrayController manages the pure-Go Win32 system tray icon and context menu.
 type TrayController struct {
-	hooks   TrayHooks
-	mu      sync.Mutex
-	hwnd    uintptr
-	hIcon   uintptr
-	tipText string
-	readyCh chan struct{}
-	doneCh  chan struct{}
+	hooks        TrayHooks
+	mu           sync.Mutex
+	hwnd         uintptr
+	hIcon        uintptr
+	tipText      string
+	balloonTitle string
+	balloonBody  string
+	balloonWarn  bool
+	readyCh      chan struct{}
+	doneCh       chan struct{}
 }
 
 func NewTrayController(hooks TrayHooks) *TrayController {
@@ -196,6 +203,19 @@ func (t *TrayController) UpdateTooltip(tip string) {
 	t.mu.Unlock()
 	if hwnd != 0 {
 		_, _, _ = procPostMessageW.Call(hwnd, wmUpdateTip, 0, 0)
+	}
+}
+
+// ShowNotification displays a Windows system tray balloon / toast notification asynchronously.
+func (t *TrayController) ShowNotification(title, body string, warning bool) {
+	t.mu.Lock()
+	t.balloonTitle = title
+	t.balloonBody = body
+	t.balloonWarn = warning
+	hwnd := t.hwnd
+	t.mu.Unlock()
+	if hwnd != 0 {
+		_, _, _ = procPostMessageW.Call(hwnd, wmShowBalloon, 0, 0)
 	}
 }
 
@@ -294,17 +314,20 @@ func (t *TrayController) notifyIcon(action uint32, hwnd, hIcon uintptr, tip stri
 	case nimAdd:
 		nid.uFlags = nifMessage | nifIcon | nifTip
 		nid.hIcon = hIcon
-		copyUTF16Tip(&nid.szTip, tip)
+		copyUTF16Fixed(nid.szTip[:], tip)
 	case nimModify:
 		nid.uFlags = nifTip
-		copyUTF16Tip(&nid.szTip, tip)
+		copyUTF16Fixed(nid.szTip[:], tip)
 	case nimDelete:
 		nid.uFlags = 0
 	}
 	_, _, _ = procShellNotifyIconW.Call(uintptr(action), uintptr(unsafe.Pointer(&nid)))
 }
 
-func copyUTF16Tip(dst *[128]uint16, s string) {
+func copyUTF16Fixed(dst []uint16, s string) {
+	if len(dst) == 0 {
+		return
+	}
 	u, err := windows.UTF16FromString(s)
 	if err != nil {
 		return
@@ -313,8 +336,24 @@ func copyUTF16Tip(dst *[128]uint16, s string) {
 	if n > len(dst) {
 		n = len(dst)
 	}
-	copy(dst[:], u[:n])
+	copy(dst, u[:n])
 	dst[len(dst)-1] = 0
+}
+
+func (t *TrayController) notifyBalloon(hwnd uintptr, title, body string, warning bool) {
+	var nid notifyIconDataW
+	nid.cbSize = uint32(unsafe.Sizeof(nid))
+	nid.hWnd = hwnd
+	nid.uID = 1
+	nid.uFlags = nifInfo
+	if warning {
+		nid.dwInfoFlags = niifWarning
+	} else {
+		nid.dwInfoFlags = niifInfo
+	}
+	copyUTF16Fixed(nid.szInfoTitle[:], title)
+	copyUTF16Fixed(nid.szInfo[:], body)
+	_, _, _ = procShellNotifyIconW.Call(nimModify, uintptr(unsafe.Pointer(&nid)))
 }
 
 func (t *TrayController) wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
@@ -335,6 +374,14 @@ func (t *TrayController) wndProc(hwnd uintptr, msg uint32, wParam, lParam uintpt
 		tip := t.tipText
 		t.mu.Unlock()
 		t.notifyIcon(nimModify, hwnd, 0, tip)
+		return 0
+	case wmShowBalloon:
+		t.mu.Lock()
+		title := t.balloonTitle
+		body := t.balloonBody
+		warn := t.balloonWarn
+		t.mu.Unlock()
+		t.notifyBalloon(hwnd, title, body, warn)
 		return 0
 	case wmQuitTray:
 		_, _, _ = procDestroyWindow.Call(hwnd)

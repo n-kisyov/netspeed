@@ -152,7 +152,7 @@ func (e *Engine) Run(ctx context.Context, cfg TestConfig, cb ProgressCallback) (
 	base.Progress = 0
 	emit(cb, base)
 
-	pingMS, jitterMS, err := runPingPhase(ctx, provider, targetServer, 12)
+	pingMS, jitterMS, lossPct, err := runPingPhase(ctx, provider, targetServer, 12)
 	if err != nil {
 		// In auto mode, if Ookla server fails ping mid-flight, try falling back to Cloudflare.
 		if cfg.Provider == ProviderAuto && provider.Type() != ProviderCloudflare && cfg.ServerID == "" {
@@ -162,7 +162,7 @@ func (e *Engine) Run(ctx context.Context, cfg TestConfig, cb ProgressCallback) (
 				targetServer = cfSrvs[0]
 				base.Server = targetServer
 				base.Message = "Switched to Cloudflare Edge after primary server timeout"
-				pingMS, jitterMS, err = runPingPhase(ctx, provider, targetServer, 12)
+				pingMS, jitterMS, lossPct, err = runPingPhase(ctx, provider, targetServer, 12)
 			}
 		}
 	}
@@ -178,11 +178,13 @@ func (e *Engine) Run(ctx context.Context, cfg TestConfig, cb ProgressCallback) (
 	base.Server = targetServer
 	base.PingMS = pingMS
 	base.JitterMS = jitterMS
+	base.PacketLossPct = lossPct
 	base.Progress = 1
-	base.Message = fmt.Sprintf("Ping %.2f ms · Jitter %.2f ms", pingMS, jitterMS)
+	base.Message = fmt.Sprintf("Ping %.2f ms · Jitter %.2f ms · Loss %.1f%%", pingMS, jitterMS, lossPct)
 	emit(cb, base)
 
 	var dlOut, ulOut transferOutcome
+	uploadUnsupported := false
 
 	// Phase 2: Download
 	if !cfg.SkipDownload {
@@ -204,42 +206,60 @@ func (e *Engine) Run(ctx context.Context, cfg TestConfig, cb ProgressCallback) (
 		base.Message = "Testing upload speed..."
 		ulOut, err = runTransferPhase(ctx, e.httpClient, provider, targetServer, PhaseUpload, cfg.Threads, cfg.Duration, base, cb)
 		if err != nil {
-			base.Phase = PhaseError
-			base.Err = err
-			base.Message = err.Error()
-			emit(cb, base)
-			return Result{}, err
+			isGenericCustom := false
+			if cp, ok := provider.(*CustomProvider); ok && cp.IsGenericMode() {
+				isGenericCustom = true
+			}
+			if ctx.Err() == nil && isGenericCustom && !cfg.SkipDownload && dlOut.Bytes > 0 {
+				ulOut = transferOutcome{}
+				uploadUnsupported = true
+			} else {
+				base.Phase = PhaseError
+				base.Err = err
+				base.Message = err.Error()
+				emit(cb, base)
+				return Result{}, err
+			}
 		}
 		base.UploadMbps = ulOut.Mbps
 		base.UploadPingMS = ulOut.LoadedPingMS
 	}
 
+	grade := ComputeBufferbloatGrade(pingMS, dlOut.LoadedPingMS, ulOut.LoadedPingMS)
+
 	res := Result{
-		ID:              fmt.Sprintf("%d", time.Now().UnixNano()),
-		Timestamp:       time.Now(),
-		Trigger:         cfg.Trigger,
-		Provider:        provider.Type(),
-		Client:          clientInfo,
-		Server:          targetServer,
-		PingMS:          pingMS,
-		JitterMS:        jitterMS,
-		DownloadPingMS:  dlOut.LoadedPingMS,
-		UploadPingMS:    ulOut.LoadedPingMS,
-		DownloadMbps:    dlOut.Mbps,
-		UploadMbps:      ulOut.Mbps,
-		DownloadBytes:   dlOut.Bytes,
-		UploadBytes:     ulOut.Bytes,
-		DownloadSamples: dlOut.Samples,
-		UploadSamples:   ulOut.Samples,
-		DurationMS:      time.Since(startWall).Milliseconds(),
+		ID:               fmt.Sprintf("%d", time.Now().UnixNano()),
+		Timestamp:        time.Now(),
+		Trigger:          cfg.Trigger,
+		Provider:         provider.Type(),
+		Client:           clientInfo,
+		Server:           targetServer,
+		PingMS:           pingMS,
+		JitterMS:         jitterMS,
+		DownloadPingMS:   dlOut.LoadedPingMS,
+		UploadPingMS:     ulOut.LoadedPingMS,
+		PacketLossPct:    lossPct,
+		BufferbloatGrade: grade,
+		DownloadMbps:     dlOut.Mbps,
+		UploadMbps:       ulOut.Mbps,
+		DownloadBytes:    dlOut.Bytes,
+		UploadBytes:      ulOut.Bytes,
+		DownloadSamples:  dlOut.Samples,
+		UploadSamples:    ulOut.Samples,
+		DurationMS:       time.Since(startWall).Milliseconds(),
 	}
 
 	doneEv := base
 	doneEv.Phase = PhaseDone
 	doneEv.Progress = 1
 	doneEv.CurrentMbps = 0
+	doneEv.BufferbloatGrade = grade
 	doneEv.Result = &res
-	doneEv.Message = "Speed test complete"
+	if uploadUnsupported {
+		doneEv.Message = "Completed (upload not supported by custom endpoint)"
+	} else {
+		doneEv.Message = "Speed test complete"
+	}
 	emit(cb, doneEv)
 
 	return res, nil

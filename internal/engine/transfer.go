@@ -145,35 +145,45 @@ func (p *payloadStream) Read(dst []byte) (int, error) {
 	return copied, nil
 }
 
-// runPingPhase performs sequential latency probes (after 1 warmup probe for TLS/keep-alive).
-func runPingPhase(ctx context.Context, p Provider, server Server, probes int) (minMS, jitterMS float64, err error) {
+// runPingPhase performs sequential latency probes (after 1 warmup probe for TLS/keep-alive)
+// and computes minimum RTT, jitter, and packet loss percentage.
+func runPingPhase(ctx context.Context, p Provider, server Server, probes int) (minMS, jitterMS, lossPct float64, err error) {
 	if probes <= 0 {
 		probes = 12
 	}
 	// Warmup probe to establish TLS/TCP keep-alive connection.
-	_, _ = p.ProbeLatency(ctx, server)
+	warmCtx, warmCancel := context.WithTimeout(ctx, 2500*time.Millisecond)
+	_, _ = p.ProbeLatency(warmCtx, server)
+	warmCancel()
 
 	rtts := make([]time.Duration, 0, probes)
+	failed := 0
 	var lastErr error
 	for i := 0; i < probes; i++ {
 		if ctx.Err() != nil {
-			return 0, 0, ctx.Err()
+			return 0, 0, 0, ctx.Err()
 		}
-		d, err := p.ProbeLatency(ctx, server)
+		probeCtx, pCancel := context.WithTimeout(ctx, 1800*time.Millisecond)
+		d, err := p.ProbeLatency(probeCtx, server)
+		pCancel()
 		if err != nil {
 			lastErr = err
+			if ctx.Err() == nil {
+				failed++
+			}
 			continue
 		}
 		rtts = append(rtts, d)
 	}
+	lossPct = Round2(float64(failed) * 100.0 / float64(probes))
 	if len(rtts) == 0 {
 		if lastErr != nil {
-			return 0, 0, lastErr
+			return 0, 0, 100.0, lastErr
 		}
-		return 0, 0, errors.New("all latency probes failed")
+		return 0, 0, 100.0, errors.New("all latency probes failed")
 	}
 	minMS, _, jitterMS = ComputePingAndJitter(rtts)
-	return minMS, jitterMS, nil
+	return minMS, jitterMS, lossPct, nil
 }
 
 type transferOutcome struct {
