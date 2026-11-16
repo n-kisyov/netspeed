@@ -47,11 +47,20 @@ func Default() Config {
 	}
 }
 
-// AppDir returns the persistent data directory (%AppData%\NetSpeed on Windows).
+// AppDir returns the persistent data directory (%AppData%\NetSpeed on Windows,
+// ~/.config/NetSpeed on Linux/Raspberry Pi, or NETSPEED_DATA_DIR if set).
 func AppDir() string {
+	if envDir := strings.TrimSpace(os.Getenv("NETSPEED_DATA_DIR")); envDir != "" {
+		_ = os.MkdirAll(envDir, 0o755)
+		return envDir
+	}
 	base, err := os.UserConfigDir()
 	if err != nil || base == "" {
-		return "."
+		if home, herr := os.UserHomeDir(); herr == nil && home != "" {
+			base = filepath.Join(home, ".config")
+		} else {
+			return "."
+		}
 	}
 	dir := filepath.Join(base, "NetSpeed")
 	_ = os.MkdirAll(dir, 0o755)

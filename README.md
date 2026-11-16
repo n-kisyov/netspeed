@@ -1,6 +1,6 @@
 # NetSpeed & NetSpeed CLI
 
-Minimalist Windows 11 internet speed test desktop application (`netspeed.exe`) and command-line tool (`netspeed-cli.exe`) built in **pure Go** with a shared multi-provider measurement engine and **Gio UI (`gioui.org`)** GPU-accelerated rendering.
+Minimalist Windows 11 internet speed test desktop application (`netspeed.exe`), **Raspberry Pi OS web application (`netspeed-web`)**, and cross-platform command-line tool (`netspeed-cli`) built in **pure Go** with a shared multi-provider measurement engine.
 
 ## Screenshots
 
@@ -35,29 +35,64 @@ Minimalist Windows 11 internet speed test desktop application (`netspeed.exe`) a
   - Windows 11 **System Tray Mode** (`Shell_NotifyIconW`) with minimize/close-to-tray, live speed tooltip, **Launch at Windows Login**, and **Tray Balloon Alerts** (scheduled completions & low-speed threshold alerts)
   - **Scheduled Background Tests** (`15m`, `30m`, `1h`, `6h`, `24h`, or custom minutes) with live countdown that continue running while minimized to tray
   - Shared test history with **Recent Trend Graph**, per-entry Copy/Delete actions, and CSV export
-- **Command-Line Tool (`netspeed-cli.exe`)**:
+- **Web Application & Server for Raspberry Pi OS (`netspeed-web`)**:
+  - Single self-contained pure-Go binary (`CGO_ENABLED=0`) embedding the responsive Dark/Light Web UI (no Node.js, Python, or external CDN required)
+  - Targets **Raspberry Pi 3B+**, **Raspberry Pi 4**, and **Raspberry Pi 5** on both **64-bit (`arm64`)** and **32-bit (`armv7`)** Raspberry Pi OS
+  - Live Server-Sent Events (`/api/events`) dashboard with 240° animated gauge, Sparklines, Bufferbloat Grade, Copy Result (including plain-HTTP LAN clipboard support), and downloadable `840x460` PNG Result Cards (`/api/card`)
+  - Background scheduler, optional browser Web Alerts + Low Speed threshold, systemd user-service autostart toggle (`Launch Server at Boot`), server selector, custom URL endpoints, trend graph, and CSV/JSON history exports
+- **Command-Line Tool (`netspeed-cli` / `netspeed-cli.exe`)**:
   - Live ANSI terminal progress bar & sparkline
   - Machine-readable `--json` and `--csv` outputs (for speed runs, `--history`, and `--list`), plus `--simple`
-  - Built-in `--schedule <duration>` loop and `--history` viewer shared with the GUI
+  - Built-in `--schedule <duration>` loop and `--history` viewer shared with the GUI / Web App
 
 ## Repository Structure
 
 ```text
 cmd/
-  netspeed/       # Pure Go GPU desktop GUI (Gio + Win32 DWM + System Tray)
-  netspeed-cli/   # Interactive & scriptable CLI binary
+  netspeed/       # Windows pure Go GPU desktop GUI (Gio + Win32 DWM + System Tray)
+  netspeed-web/   # Cross-platform / Raspberry Pi HTTP server + embedded SPA web UI
+  netspeed-cli/   # Interactive & scriptable CLI binary (Windows + Linux/Pi)
 internal/
   engine/         # Ookla, Cloudflare, and Custom URL speed test engine
-  config/         # Persistent settings (%AppData%\NetSpeed\config.json)
-  history/        # Shared test history (%AppData%\NetSpeed\history.json)
+  card/           # Shared 840x460 PNG result card renderer & text summary formatter
+  config/         # Persistent settings (%AppData%\NetSpeed or ~/.config/NetSpeed)
+  history/        # Shared test history (history.json + CSV/JSON exports)
   scheduler/      # Background periodic test scheduler
 ```
 
 ## Build & Run
 
+### Windows 11
+
 ```powershell
-# Run tests and build both binaries into .\bin\
+# Run tests and build netspeed.exe, netspeed-web.exe, and netspeed-cli.exe into .\bin\
 .\build.ps1
+```
+
+### Raspberry Pi OS (Pi 3B+ / Pi 4 / Pi 5)
+
+`build-pi.sh` checks whether Go is installed, optionally downloads/installs Go for your Raspberry Pi architecture (or falls back to `apt-get install golang`), runs the test suite, and builds zero-CGo binaries for `arm64` (64-bit OS) and `armv7` (32-bit OS):
+
+```bash
+chmod +x build-pi.sh
+
+# Auto-detect Raspberry Pi architecture (prompts to install Go if missing)
+./build-pi.sh
+
+# Non-interactive install of Go if missing + build for this Raspberry Pi
+./build-pi.sh --install-go --target native
+
+# Cross-compile for both 64-bit (Pi 3B+/4/5) and 32-bit (Pi 3B+/4) Raspberry Pi OS
+./build-pi.sh --target all
+```
+
+Start the embedded Web Server on your Raspberry Pi (accessible from any device on your LAN at `http://<pi-ip>:8080`):
+
+```bash
+./bin/netspeed-web -addr :8080
+
+# Or verify health non-interactively
+./bin/netspeed-web --smoke-test
 ```
 
 ### CLI Usage

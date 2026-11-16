@@ -2,12 +2,9 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"time"
-
-	"golang.org/x/sys/windows"
 
 	"netspeed/internal/engine"
 )
@@ -34,24 +31,9 @@ type terminalUI struct {
 
 func newTerminalUI(unit string) *terminalUI {
 	return &terminalUI{
-		ansiEnabled: enableWindowsVT(),
+		ansiEnabled: enableTerminalVT(),
 		unit:        unit,
 	}
-}
-
-func enableWindowsVT() bool {
-	h := windows.Handle(os.Stdout.Fd())
-	var mode uint32
-	if err := windows.GetConsoleMode(h, &mode); err != nil {
-		return false
-	}
-	const enableVT = 0x0004
-	if mode&enableVT == 0 {
-		if err := windows.SetConsoleMode(h, mode|enableVT); err != nil {
-			return false
-		}
-	}
-	return true
 }
 
 func (u *terminalUI) c(code, text string) string {

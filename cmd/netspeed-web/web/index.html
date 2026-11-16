@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NetSpeed Web Dashboard</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="brand-row">
+          <svg class="brand-icon" viewBox="0 0 28 28" aria-hidden="true">
+            <circle cx="14" cy="14" r="12" fill="none" stroke="currentColor" stroke-width="2" opacity="0.25" />
+            <path d="M5.5 20.5 A 10 10 0 1 1 22.5 20.5" fill="none" stroke="var(--accent-download)" stroke-width="2.6" stroke-linecap="round" />
+            <line x1="14" y1="14" x2="20" y2="8.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+            <circle cx="14" cy="14" r="2.2" fill="var(--accent-download)" />
+          </svg>
+          <h1 class="brand-title">NetSpeed</h1>
+          <span id="autoPill" class="pill pill-success hidden">AUTO 60m</span>
+        </div>
+        <div class="header-actions">
+          <button id="unitBtn" class="btn btn-secondary" type="button">Mbps</button>
+          <button id="themeBtn" class="btn btn-secondary" type="button">Theme: Dark</button>
+          <span id="platformBadge" class="platform-tag">linux/arm64</span>
+        </div>
+      </div>
+
+      <nav class="tabs" role="tablist" aria-label="Main Navigation">
+        <button class="tab-btn active" data-tab="dashboard" type="button" role="tab">Speed Test</button>
+        <button class="tab-btn" data-tab="servers" type="button" role="tab">Servers &amp; URL</button>
+        <button class="tab-btn" data-tab="schedule" type="button" role="tab">Schedule &amp; Service</button>
+        <button class="tab-btn" data-tab="history" type="button" role="tab">History</button>
+      </nav>
+    </header>
+
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+    <!-- TAB 1: SPEED TEST DASHBOARD -->
+    <main id="tab-dashboard" class="tab-panel active">
+      <section class="gauge-stage">
+        <div class="gauge-wrap">
+          <svg id="gaugeSvg" viewBox="0 0 360 320" class="gauge-svg" aria-label="Speedometer gauge">
+            <g id="gaugeTicks"></g>
+            <path id="gaugeTrackArc" class="gauge-track-arc" fill="none" stroke-width="14" stroke-linecap="round" />
+            <path id="gaugeActiveArc" class="gauge-active-arc" fill="none" stroke-width="14" stroke-linecap="round" />
+            <line id="gaugeNeedle" class="gauge-needle" x1="180" y1="170" x2="180" y2="62" stroke-width="3" stroke-linecap="round" />
+            <circle id="gaugeNeedleDot" cx="180" cy="62" r="5" class="gauge-needle-dot" />
+          </svg>
+
+          <div class="gauge-center">
+            <button id="goCircleBtn" class="go-circle" type="button">
+              <span class="go-main">GO</span>
+              <span class="go-sub">START TEST</span>
+            </button>
+            <div id="liveReadout" class="live-readout hidden">
+              <div id="livePhaseLabel" class="live-phase">DOWNLOAD</div>
+              <div id="liveSpeedValue" class="live-value">0.0</div>
+              <div id="liveUnitLabel" class="live-unit">Mbps</div>
+              <button id="stopBtn" class="btn-stop" type="button">STOP</button>
+            </div>
+          </div>
+        </div>
+        <div id="statusMsg" class="status-line">Ready to test</div>
+      </section>
+
+      <section class="metrics-grid">
+        <article class="card metric-card">
+          <div class="card-head">
+            <span class="metric-title ping-color">PING &amp; JITTER</span>
+            <span id="gradeBadge" class="grade-badge hidden">Grade A+</span>
+          </div>
+          <div class="metric-value-row">
+            <span id="pingVal" class="metric-val">—</span>
+            <span class="metric-unit">ms</span>
+          </div>
+          <div id="jitterLossLine" class="metric-sub">Jitter: — ms &nbsp;·&nbsp; Loss: —%</div>
+          <div id="loadedPingLine" class="metric-muted">Loaded: — / — ms</div>
+        </article>
+
+        <article class="card metric-card">
+          <div class="card-head">
+            <span class="metric-title dl-color">DOWNLOAD</span>
+            <span id="dlBytesLabel" class="metric-muted"></span>
+          </div>
+          <div class="metric-value-row">
+            <span id="dlVal" class="metric-val">—</span>
+            <span id="dlUnit" class="metric-unit">Mbps</span>
+          </div>
+          <canvas id="dlSpark" class="spark-canvas" aria-label="Download throughput curve"></canvas>
+        </article>
+
+        <article class="card metric-card">
+          <div class="card-head">
+            <span class="metric-title ul-color">UPLOAD</span>
+            <span id="ulBytesLabel" class="metric-muted"></span>
+          </div>
+          <div class="metric-value-row">
+            <span id="ulVal" class="metric-val">—</span>
+            <span id="ulUnit" class="metric-unit">Mbps</span>
+          </div>
+          <canvas id="ulSpark" class="spark-canvas" aria-label="Upload throughput curve"></canvas>
+        </article>
+      </section>
+
+      <footer class="card footer-card">
+        <div class="footer-info">
+          <div id="footerServer" class="footer-server">Server: Auto discovery...</div>
+          <button id="ipToggleBtn" class="footer-client" type="button" title="Click to toggle IP masking">
+            Client ISP: Discovering network...
+          </button>
+        </div>
+        <div class="footer-actions">
+          <button id="copyResultBtn" class="btn btn-secondary" type="button" disabled>Copy Result</button>
+          <button id="saveCardBtn" class="btn btn-secondary" type="button" disabled>Save Card PNG</button>
+        </div>
+      </footer>
+    </main>
+
+    <!-- TAB 2: SERVERS & CUSTOM URL -->
+    <main id="tab-servers" class="tab-panel">
+      <section class="card section-card">
+        <h2 class="section-label">TEST PROVIDER</h2>
+        <div id="providerGroup" class="btn-group">
+          <button class="btn btn-choice" data-provider="auto" type="button">Auto (Ookla + Fallback)</button>
+          <button class="btn btn-choice" data-provider="ookla" type="button">Ookla (Speedtest.net)</button>
+          <button class="btn btn-choice" data-provider="cloudflare" type="button">Cloudflare Edge</button>
+          <button class="btn btn-choice" data-provider="custom" type="button">Custom Server URL</button>
+        </div>
+      </section>
+
+      <section class="card section-card">
+        <h2 class="section-label">CUSTOM SERVER URL (HTTP / HTTPS / OOKLA HOST)</h2>
+        <form id="customUrlForm" class="input-row">
+          <input id="customUrlInput" class="text-input" type="text" placeholder="e.g. https://speed.cloudflare.com/__down?bytes=50000000 or speedtest.example.net:8080" />
+          <button class="btn btn-primary" type="submit">Use Custom URL</button>
+        </form>
+        <div id="customUrlError" class="error-text hidden"></div>
+        <div id="recentUrlsWrap" class="recent-urls hidden">
+          <span class="muted-label">Recent:</span>
+          <div id="recentUrlsList" class="btn-group"></div>
+        </div>
+      </section>
+
+      <section class="card section-card servers-card">
+        <div class="section-head">
+          <h2 class="section-label">NEARBY DISCOVERED SERVERS</h2>
+          <button id="refreshServersBtn" class="btn btn-secondary" type="button">Refresh</button>
+        </div>
+        <div id="serversError" class="error-text hidden"></div>
+        <div id="serversList" class="list-stack"></div>
+      </section>
+    </main>
+
+    <!-- TAB 3: SCHEDULE, RASPBERRY PI SERVICE & ENGINE TUNING -->
+    <main id="tab-schedule" class="tab-panel">
+      <section class="card section-card">
+        <div class="section-head">
+          <div>
+            <h2 class="card-title">Scheduled Background Tests</h2>
+            <p class="card-desc">Runs automatically on the Raspberry Pi server even with all browser tabs closed</p>
+          </div>
+          <button id="schedToggleBtn" class="btn btn-toggle" type="button">OFF — Manual Only</button>
+        </div>
+
+        <div class="sched-controls">
+          <div id="schedPresets" class="btn-group">
+            <button class="btn btn-choice" data-mins="15" type="button">15m</button>
+            <button class="btn btn-choice" data-mins="30" type="button">30m</button>
+            <button class="btn btn-choice" data-mins="60" type="button">1h</button>
+            <button class="btn btn-choice" data-mins="360" type="button">6h</button>
+            <button class="btn btn-choice" data-mins="1440" type="button">24h</button>
+          </div>
+          <form id="customMinForm" class="inline-form">
+            <input id="customMinInput" class="text-input input-sm" type="number" min="1" max="10080" placeholder="Custom min" />
+            <button class="btn btn-secondary" type="submit">Set</button>
+          </form>
+        </div>
+
+        <div id="nextRunLine" class="info-line">Next Run: Disabled</div>
+        <div id="lastSchedLine" class="muted-line"></div>
+      </section>
+
+      <section class="card section-card">
+        <h2 class="card-title">Raspberry Pi Autostart, Alerts &amp; Engine Tuning</h2>
+        <div class="btn-group tuning-row">
+          <button id="startupToggleBtn" class="btn btn-toggle" type="button">Startup: Off (Manual Launch)</button>
+          <button id="alertsToggleBtn" class="btn btn-toggle" type="button">Web Alerts: On</button>
+        </div>
+
+        <div class="tuning-row">
+          <span class="muted-label">Low Speed Alert:</span>
+          <div id="alertThreshGroup" class="btn-group">
+            <button class="btn btn-choice" data-thresh="0" type="button">Off</button>
+            <button class="btn btn-choice" data-thresh="25" type="button">&lt; 25 Mbps</button>
+            <button class="btn btn-choice" data-thresh="50" type="button">&lt; 50 Mbps</button>
+            <button class="btn btn-choice" data-thresh="100" type="button">&lt; 100 Mbps</button>
+            <button class="btn btn-choice" data-thresh="250" type="button">&lt; 250 Mbps</button>
+          </div>
+        </div>
+
+        <div class="tuning-row wrap-gap">
+          <div class="inline-group">
+            <span class="muted-label">Streams:</span>
+            <div id="threadsGroup" class="btn-group">
+              <button class="btn btn-choice" data-threads="4" type="button">4</button>
+              <button class="btn btn-choice" data-threads="8" type="button">8</button>
+              <button class="btn btn-choice" data-threads="16" type="button">16</button>
+              <button class="btn btn-choice" data-threads="32" type="button">32</button>
+            </div>
+          </div>
+          <div class="inline-group">
+            <span class="muted-label">Phase Duration:</span>
+            <div id="durGroup" class="btn-group">
+              <button class="btn btn-choice" data-dur="5" type="button">5s</button>
+              <button class="btn btn-choice" data-dur="10" type="button">10s</button>
+              <button class="btn btn-choice" data-dur="15" type="button">15s</button>
+            </div>
+          </div>
+        </div>
+
+        <details class="systemd-details">
+          <summary>System-wide Raspberry Pi OS service template (<code>/etc/systemd/system/netspeed-web.service</code>)</summary>
+          <pre id="systemdPreview" class="code-box"></pre>
+        </details>
+      </section>
+    </main>
+
+    <!-- TAB 4: HISTORY & TRENDS -->
+    <main id="tab-history" class="tab-panel">
+      <section id="trendCard" class="card section-card">
+        <div class="section-head">
+          <h2 id="trendHeading" class="section-label">RECENT TREND</h2>
+          <div class="legend">
+            <span class="legend-item dl-color">— Download</span>
+            <span class="legend-item ul-color">— Upload</span>
+            <span class="legend-item ping-color">— Ping</span>
+          </div>
+        </div>
+        <canvas id="trendCanvas" class="trend-canvas" aria-label="Historical speed trend graph"></canvas>
+      </section>
+
+      <section class="card section-card">
+        <div class="section-head">
+          <h2 id="historyTitle" class="card-title">Saved Test History (0 runs)</h2>
+          <div class="btn-group">
+            <a class="btn btn-secondary" href="/api/history/export.csv" download="netspeed-history.csv">Export CSV</a>
+            <a class="btn btn-secondary" href="/api/history/export.json" download="netspeed-history.json">Export JSON</a>
+            <button id="clearHistoryBtn" class="btn btn-danger-outline" type="button">Clear History</button>
+          </div>
+        </div>
+        <div id="historyList" class="list-stack"></div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

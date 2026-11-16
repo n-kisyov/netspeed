@@ -1,3 +1,5 @@
+//go:build windows
+
 package main
 
 import (
@@ -6,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 
+	"netspeed/internal/card"
 	"netspeed/internal/config"
 	"netspeed/internal/engine"
 	"netspeed/internal/history"
@@ -591,27 +593,7 @@ func (a *App) startTest(trigger string) {
 }
 
 func formatResultSummary(r engine.Result, unitName string) string {
-	dlV, dlU := engine.FormatSpeed(r.DownloadMbps, unitName)
-	ulV, ulU := engine.FormatSpeed(r.UploadMbps, unitName)
-	trig := r.Trigger
-	if trig == "" {
-		trig = "manual"
-	}
-	grade := r.BufferbloatGrade
-	if grade == "" {
-		grade = "—"
-	}
-	return fmt.Sprintf(
-		"NetSpeed Result (%s)\r\nTime: %s\r\nProvider: %s\r\nServer: %s\r\nIdle Ping: %.2f ms (Jitter: %.2f ms, Loss: %.1f%%)\r\nBufferbloat Grade: %s\r\nDownload: %.2f %s (Loaded Ping: %.1f ms)\r\nUpload: %.2f %s (Loaded Ping: %.1f ms)\r\n",
-		strings.ToUpper(trig),
-		r.Timestamp.Local().Format("2006-01-02 15:04:05"),
-		strings.ToUpper(string(r.Provider)),
-		r.Server.Name,
-		r.PingMS, r.JitterMS, r.PacketLossPct,
-		grade,
-		dlV, dlU, r.DownloadPingMS,
-		ulV, ulU, r.UploadPingMS,
-	)
+	return card.FormatResultSummary(r, unitName, true)
 }
 
 func (a *App) buildClipboardSummary() (string, bool) {
